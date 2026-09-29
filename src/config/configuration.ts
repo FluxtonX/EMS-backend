@@ -1,0 +1,21 @@
+export default () => ({
+  port: parseInt(process.env.PORT || '4000', 10),
+  nodeEnv: process.env.NODE_ENV || 'development',
+  cors: {
+    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  },
+  database: {
+    supabaseUrl: process.env.SUPABASE_URL || 'https://mock-supabase.supabase.co',
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
+  },
+  jwt: {
+    secret: process.env.JWT_SECRET || 'dev_jwt_secret_change_in_production_strict_entropy_key_32_chars_min',
+    expiresIn: process.env.JWT_EXPIRES_IN || '15m',
+    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+  },
+  throttle: {
+    ttl: parseInt(process.env.THROTTLE_TTL || '60', 10),
+    limit: parseInt(process.env.THROTTLE_LIMIT || '100', 10),
+  },
+});
