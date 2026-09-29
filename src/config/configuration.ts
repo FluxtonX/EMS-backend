@@ -1,3 +1,13 @@
+const jwtSecret = process.env.JWT_SECRET;
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (
+  isProduction &&
+  (!jwtSecret || jwtSecret.length < 32 || /production_grade_secret_key|change_in_production/i.test(jwtSecret))
+) {
+  throw new Error('Set JWT_SECRET to a random value of at least 32 characters in production');
+}
+
 export default () => ({
   port: parseInt(process.env.PORT || '4000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
