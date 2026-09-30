@@ -33,8 +33,12 @@ export enum Permission {
   ATTENDANCE_VIEW = 'attendance:view',
 
   // Documents & Licences
+  DOCUMENT_UPLOAD = 'document:upload',
   DOCUMENT_VERIFY = 'document:verify',
   DOCUMENT_VIEW = 'document:view',
+  DOCUMENT_DELETE = 'document:delete',
+  LICENCE_MANAGE = 'licence:manage',
+  LICENCE_VIEW = 'licence:view',
 
   // Leave & Availability
   LEAVE_APPROVE = 'leave:approve',
@@ -43,6 +47,29 @@ export enum Permission {
   // Reports & Audits
   REPORT_VIEW = 'report:view',
   AUDIT_VIEW = 'audit:view',
+
+  // Notifications
+  NOTIFICATION_VIEW = 'notification:view',
+  NOTIFICATION_MANAGE = 'notification:manage',
+
+  // Timesheets & Payroll Foundation (Phase 12)
+  TIMESHEET_VIEW = 'timesheet:view',
+  TIMESHEET_MANAGE = 'timesheet:manage',
+  TIMESHEET_APPROVE = 'timesheet:approve',
+
+  // Payroll & Payslips (Phase 13)
+  PAYROLL_VIEW = 'payroll:view',
+  PAYROLL_MANAGE = 'payroll:manage',
+  PAYROLL_APPROVE = 'payroll:approve',
+  PAYSLIP_VIEW = 'payslip:view',
+
+  // Clients, Contracts & Invoicing (Phase 14)
+  CLIENT_VIEW = 'client:view',
+  CLIENT_MANAGE = 'client:manage',
+  CONTRACT_VIEW = 'contract:view',
+  CONTRACT_MANAGE = 'contract:manage',
+  INVOICE_VIEW = 'invoice:view',
+  INVOICE_MANAGE = 'invoice:manage',
 }
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
@@ -66,12 +93,31 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ATTENDANCE_MANAGE,
     Permission.ATTENDANCE_CLOCK,
     Permission.ATTENDANCE_VIEW,
+    Permission.DOCUMENT_UPLOAD,
     Permission.DOCUMENT_VERIFY,
     Permission.DOCUMENT_VIEW,
+    Permission.DOCUMENT_DELETE,
+    Permission.LICENCE_MANAGE,
+    Permission.LICENCE_VIEW,
     Permission.LEAVE_APPROVE,
     Permission.LEAVE_REQUEST,
     Permission.REPORT_VIEW,
     Permission.AUDIT_VIEW,
+    Permission.NOTIFICATION_VIEW,
+    Permission.NOTIFICATION_MANAGE,
+    Permission.TIMESHEET_VIEW,
+    Permission.TIMESHEET_MANAGE,
+    Permission.TIMESHEET_APPROVE,
+    Permission.PAYROLL_VIEW,
+    Permission.PAYROLL_MANAGE,
+    Permission.PAYROLL_APPROVE,
+    Permission.PAYSLIP_VIEW,
+    Permission.CLIENT_VIEW,
+    Permission.CLIENT_MANAGE,
+    Permission.CONTRACT_VIEW,
+    Permission.CONTRACT_MANAGE,
+    Permission.INVOICE_VIEW,
+    Permission.INVOICE_MANAGE,
   ],
   [Role.Manager]: [
     Permission.COMPANY_VIEW,
@@ -88,11 +134,30 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ATTENDANCE_MANAGE,
     Permission.ATTENDANCE_CLOCK,
     Permission.ATTENDANCE_VIEW,
+    Permission.DOCUMENT_UPLOAD,
     Permission.DOCUMENT_VERIFY,
     Permission.DOCUMENT_VIEW,
+    Permission.DOCUMENT_DELETE,
+    Permission.LICENCE_MANAGE,
+    Permission.LICENCE_VIEW,
     Permission.LEAVE_APPROVE,
     Permission.LEAVE_REQUEST,
     Permission.REPORT_VIEW,
+    Permission.NOTIFICATION_VIEW,
+    Permission.NOTIFICATION_MANAGE,
+    Permission.TIMESHEET_VIEW,
+    Permission.TIMESHEET_MANAGE,
+    Permission.TIMESHEET_APPROVE,
+    Permission.PAYROLL_VIEW,
+    Permission.PAYROLL_MANAGE,
+    Permission.PAYROLL_APPROVE,
+    Permission.PAYSLIP_VIEW,
+    Permission.CLIENT_VIEW,
+    Permission.CLIENT_MANAGE,
+    Permission.CONTRACT_VIEW,
+    Permission.CONTRACT_MANAGE,
+    Permission.INVOICE_VIEW,
+    Permission.INVOICE_MANAGE,
   ],
   [Role.Supervisor]: [
     Permission.COMPANY_VIEW,
@@ -105,13 +170,26 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ATTENDANCE_CLOCK,
     Permission.ATTENDANCE_VIEW,
     Permission.DOCUMENT_VIEW,
+    Permission.LICENCE_VIEW,
     Permission.LEAVE_REQUEST,
+    Permission.NOTIFICATION_VIEW,
+    Permission.TIMESHEET_VIEW,
+    Permission.TIMESHEET_MANAGE,
+    Permission.PAYROLL_VIEW,
+    Permission.PAYSLIP_VIEW,
+    Permission.CLIENT_VIEW,
+    Permission.CONTRACT_VIEW,
   ],
   [Role.Employee]: [
     Permission.SHIFT_VIEW,
     Permission.ATTENDANCE_CLOCK,
+    Permission.DOCUMENT_UPLOAD,
     Permission.DOCUMENT_VIEW,
+    Permission.LICENCE_VIEW,
     Permission.LEAVE_REQUEST,
+    Permission.NOTIFICATION_VIEW,
+    Permission.TIMESHEET_VIEW,
+    Permission.PAYSLIP_VIEW,
   ],
 };
 

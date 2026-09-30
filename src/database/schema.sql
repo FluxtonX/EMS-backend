@@ -272,3 +272,255 @@ CREATE INDEX IF NOT EXISTS idx_attendance_site ON attendance_records(site_id, cl
 CREATE INDEX IF NOT EXISTS idx_attendance_status ON attendance_records(company_id, status);
 CREATE INDEX IF NOT EXISTS idx_attendance_variance ON attendance_records(company_id, variance_flag);
 
+-- 14. LEAVE REQUESTS (PHASE 9)
+CREATE TABLE IF NOT EXISTS leave_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  leave_type TEXT NOT NULL CHECK (leave_type IN ('annual', 'sick', 'emergency', 'unpaid', 'other')),
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  working_days NUMERIC(4, 1) NOT NULL DEFAULT 1 CHECK (working_days > 0),
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+  reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  review_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_leave_dates CHECK (end_date >= start_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_leave_requests_company ON leave_requests(company_id, start_date);
+CREATE INDEX IF NOT EXISTS idx_leave_requests_employee ON leave_requests(employee_id, status);
+
+-- 15. EMPLOYEE AVAILABILITY (PHASE 9)
+CREATE TABLE IF NOT EXISTS employee_availability (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  day_of_week TEXT NOT NULL CHECK (day_of_week IN ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')),
+  is_available BOOLEAN NOT NULL DEFAULT true,
+  preferred_start_time TEXT,
+  preferred_end_time TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_employee_day_availability UNIQUE (company_id, employee_id, day_of_week)
+);
+
+CREATE INDEX IF NOT EXISTS idx_availability_employee ON employee_availability(employee_id);
+
+-- 16. NOTIFICATIONS (PHASE 11)
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('licence_expiry', 'shift_assigned', 'shift_reminder', 'leave_decision', 'account_event', 'compliance_alert', 'system')),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  status TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'read', 'archived')),
+  action_url TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  email_sent BOOLEAN NOT NULL DEFAULT false,
+  email_sent_at TIMESTAMPTZ,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_status ON notifications(company_id, user_id, status);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(company_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(company_id, type);
+
+-- 17. TIMESHEETS (PHASE 12 — PAYROLL FOUNDATION)
+CREATE TABLE IF NOT EXISTS timesheets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  total_hours NUMERIC(7, 2) NOT NULL DEFAULT 0 CHECK (total_hours >= 0),
+  regular_hours NUMERIC(7, 2) NOT NULL DEFAULT 0 CHECK (regular_hours >= 0),
+  overtime_hours NUMERIC(7, 2) NOT NULL DEFAULT 0 CHECK (overtime_hours >= 0),
+  break_minutes INTEGER NOT NULL DEFAULT 0 CHECK (break_minutes >= 0),
+  gross_pay NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (gross_pay >= 0),
+  currency TEXT NOT NULL DEFAULT 'GBP',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'approved', 'locked', 'rejected')),
+  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_timesheet_employee_period UNIQUE (company_id, employee_id, period_start, period_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_timesheets_company_period ON timesheets(company_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_timesheets_employee ON timesheets(employee_id, status);
+CREATE INDEX IF NOT EXISTS idx_timesheets_status ON timesheets(company_id, status);
+
+-- 18. TIMESHEET ENTRIES / LINE ITEMS (PHASE 12)
+CREATE TABLE IF NOT EXISTS timesheet_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  timesheet_id UUID NOT NULL REFERENCES timesheets(id) ON DELETE CASCADE,
+  attendance_record_id UUID REFERENCES attendance_records(id) ON DELETE SET NULL,
+  shift_id UUID REFERENCES shifts(id) ON DELETE SET NULL,
+  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  entry_date DATE NOT NULL,
+  clock_in TIMESTAMPTZ NOT NULL,
+  clock_out TIMESTAMPTZ NOT NULL,
+  break_minutes INTEGER NOT NULL DEFAULT 0 CHECK (break_minutes >= 0),
+  gross_hours NUMERIC(5, 2) NOT NULL CHECK (gross_hours >= 0),
+  net_hours NUMERIC(5, 2) NOT NULL CHECK (net_hours >= 0),
+  pay_rate NUMERIC(10, 2) NOT NULL CHECK (pay_rate >= 0),
+  total_pay NUMERIC(10, 2) NOT NULL CHECK (total_pay >= 0),
+  is_overtime BOOLEAN NOT NULL DEFAULT false,
+  adjustment_minutes INTEGER NOT NULL DEFAULT 0,
+  adjustment_reason TEXT,
+  adjusted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_timesheet_entries_timesheet ON timesheet_entries(timesheet_id);
+CREATE INDEX IF NOT EXISTS idx_timesheet_entries_date ON timesheet_entries(entry_date);
+
+-- Phase 13: Pay Runs & Payslips
+CREATE TABLE IF NOT EXISTS pay_runs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  payment_date DATE NOT NULL,
+  frequency VARCHAR(50) NOT NULL DEFAULT 'monthly',
+  status VARCHAR(50) NOT NULL DEFAULT 'draft',
+  total_gross NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  total_tax NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  total_ni NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  total_net NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  total_employees INT NOT NULL DEFAULT 0,
+  currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  paid_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pay_runs_company ON pay_runs(company_id);
+CREATE INDEX IF NOT EXISTS idx_pay_runs_period ON pay_runs(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_pay_runs_status ON pay_runs(status);
+
+CREATE TABLE IF NOT EXISTS payslips (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  pay_run_id UUID NOT NULL REFERENCES pay_runs(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  timesheet_id UUID REFERENCES timesheets(id) ON DELETE SET NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  payment_date DATE NOT NULL,
+  regular_hours NUMERIC(8, 2) NOT NULL DEFAULT 0.00,
+  overtime_hours NUMERIC(8, 2) NOT NULL DEFAULT 0.00,
+  regular_pay NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  overtime_pay NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  gross_pay NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  tax_deduction NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  national_insurance NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  other_deductions NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  net_pay NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+  status VARCHAR(50) NOT NULL DEFAULT 'draft',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payslips_company ON payslips(company_id);
+CREATE INDEX IF NOT EXISTS idx_payslips_pay_run ON payslips(pay_run_id);
+CREATE INDEX IF NOT EXISTS idx_payslips_employee ON payslips(employee_id);
+
+-- Phase 14: Clients, Contracts & Invoicing
+CREATE TABLE IF NOT EXISTS clients (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  company_number VARCHAR(100),
+  vat_number VARCHAR(100),
+  billing_email VARCHAR(255) NOT NULL,
+  phone VARCHAR(50),
+  address TEXT,
+  status VARCHAR(50) NOT NULL DEFAULT 'active', -- active, inactive
+  payment_terms_days INT NOT NULL DEFAULT 30,
+  currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_id);
+
+CREATE TABLE IF NOT EXISTS contracts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  contract_number VARCHAR(100) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  billing_cycle VARCHAR(50) NOT NULL DEFAULT 'monthly', -- weekly, bi_weekly, monthly
+  hourly_billing_rate NUMERIC(10, 2) NOT NULL DEFAULT 24.00,
+  status VARCHAR(50) NOT NULL DEFAULT 'active', -- active, expired, terminated
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_company ON contracts(company_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_client ON contracts(client_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_site ON contracts(site_id);
+
+CREATE TABLE IF NOT EXISTS invoices (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  contract_id UUID REFERENCES contracts(id) ON DELETE SET NULL,
+  invoice_number VARCHAR(100) NOT NULL,
+  issue_date DATE NOT NULL,
+  due_date DATE NOT NULL,
+  subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  tax_rate NUMERIC(5, 2) NOT NULL DEFAULT 20.00, -- UK 20% VAT
+  tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+  status VARCHAR(50) NOT NULL DEFAULT 'draft', -- draft, sent, paid, overdue, void
+  paid_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
+  job_type_id UUID REFERENCES job_types(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  hours NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+  rate NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+  total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
+
+
+
