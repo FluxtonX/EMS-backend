@@ -68,9 +68,12 @@ export interface EmergencyContact {
 
 export type EmploymentStatus = 'active' | 'probation' | 'suspended' | 'terminated' | 'on_leave';
 
+export type AccountStatus = 'invited' | 'active' | 'suspended' | 'disabled';
+
 export interface EmployeeEntity {
   id: string;
   companyId: string;
+  userId?: string;
   employeeNumber: string;
   firstName: string;
   lastName: string;
@@ -80,6 +83,7 @@ export interface EmployeeEntity {
   address: EmployeeAddress;
   emergencyContact: EmergencyContact;
   employmentStatus: EmploymentStatus;
+  accountStatus?: AccountStatus;
   employmentStartDate: string;
   employmentEndDate?: string;
   createdAt: Date;
@@ -116,6 +120,30 @@ export interface DocumentEntity {
   verifiedBy?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ChatConversationEntity {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  createdBy?: string;
+  lastMessageAt: Date;
+  lastMessagePreview?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ChatMessageEntity {
+  id: string;
+  conversationId: string;
+  companyId: string;
+  senderId: string;
+  senderRole: 'COMPANY' | 'EMPLOYEE';
+  senderName: string;
+  content: string;
+  isRead: boolean;
+  readAt?: Date;
+  createdAt: Date;
 }
 
 export interface SiteEntity {
@@ -458,6 +486,40 @@ export interface InvoiceItemEntity {
   createdAt: Date;
 }
 
+// --- Phase 1: Invitations & User Devices (Spec Sections 11, 16, 28) ---
+
+export type InvitationStatus = 'pending' | 'sent' | 'accepted' | 'expired' | 'cancelled';
+export type InvitationTargetType = 'team_member' | 'employee';
+
+export interface InvitationEntity {
+  id: string;
+  companyId: string;
+  email: string;
+  role: string;
+  targetType: InvitationTargetType;
+  targetId?: string;
+  tokenHash: string;
+  status: InvitationStatus;
+  expiresAt: Date;
+  acceptedAt?: Date;
+  invitedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type DeviceType = 'web' | 'android' | 'ios';
+
+export interface UserDeviceEntity {
+  id: string;
+  userId: string;
+  deviceType: DeviceType;
+  platform?: string;
+  pushToken: string;
+  lastSeenAt: Date;
+  revokedAt?: Date;
+  createdAt: Date;
+}
+
 @Injectable()
 export class DatabaseService implements OnModuleInit {
   private readonly logger = new Logger(DatabaseService.name);
@@ -469,6 +531,8 @@ export class DatabaseService implements OnModuleInit {
   private companyMembers: Map<string, CompanyMemberEntity> = new Map();
   private auditLogs: AuditLogEntity[] = [];
   private employees: Map<string, EmployeeEntity> = new Map();
+  private invitations: Map<string, InvitationEntity> = new Map();
+  private userDevices: Map<string, UserDeviceEntity> = new Map();
   private licences: Map<string, LicenceEntity> = new Map();
   private documents: Map<string, DocumentEntity> = new Map();
   private sites: Map<string, SiteEntity> = new Map();
@@ -488,6 +552,8 @@ export class DatabaseService implements OnModuleInit {
   private contracts: Map<string, ContractEntity> = new Map();
   private invoices: Map<string, InvoiceEntity> = new Map();
   private invoiceItems: Map<string, InvoiceItemEntity> = new Map();
+  private chatConversations: Map<string, ChatConversationEntity> = new Map();
+  private chatMessages: Map<string, ChatMessageEntity> = new Map();
 
   constructor(@Optional() private configService?: ConfigService) {}
 
@@ -496,6 +562,8 @@ export class DatabaseService implements OnModuleInit {
     const supabaseKey = this.configService?.get<string>('database.supabaseKey');
 
     if (
+      process.env.NODE_ENV !== 'test' &&
+      process.env.DATABASE_USE_MOCK !== 'true' &&
       supabaseUrl &&
       supabaseKey &&
       !supabaseUrl.includes('placeholder') &&
@@ -511,7 +579,7 @@ export class DatabaseService implements OnModuleInit {
         this.logger.warn(`Supabase client initialization deferred: ${err.message}`);
       }
     } else {
-      this.logger.log('Running in decoupled memory storage mode with placeholder credentials.');
+      this.logger.log('Running in decoupled memory storage mode with placeholder credentials or test environment.');
     }
   }
 
@@ -575,6 +643,7 @@ export class DatabaseService implements OnModuleInit {
     return {
       id: row.id,
       companyId: row.company_id,
+      userId: row.user_id || undefined,
       employeeNumber: row.employee_number,
       firstName: row.first_name,
       lastName: row.last_name,
@@ -584,10 +653,42 @@ export class DatabaseService implements OnModuleInit {
       address: typeof row.address === 'string' ? JSON.parse(row.address) : (row.address || {}),
       emergencyContact: typeof row.emergency_contact === 'string' ? JSON.parse(row.emergency_contact) : (row.emergency_contact || {}),
       employmentStatus: row.employment_status,
+      accountStatus: row.account_status || 'invited',
       employmentStartDate: row.employment_start_date,
       employmentEndDate: row.employment_end_date || undefined,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
+    };
+  }
+
+  private mapInvitation(row: any): InvitationEntity {
+    return {
+      id: row.id,
+      companyId: row.company_id,
+      email: row.email,
+      role: row.role,
+      targetType: row.target_type,
+      targetId: row.target_id || undefined,
+      tokenHash: row.token_hash,
+      status: row.status,
+      expiresAt: new Date(row.expires_at),
+      acceptedAt: row.accepted_at ? new Date(row.accepted_at) : undefined,
+      invitedBy: row.invited_by || undefined,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    };
+  }
+
+  private mapUserDevice(row: any): UserDeviceEntity {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      deviceType: row.device_type,
+      platform: row.platform || undefined,
+      pushToken: row.push_token,
+      lastSeenAt: new Date(row.last_seen_at),
+      revokedAt: row.revoked_at ? new Date(row.revoked_at) : undefined,
+      createdAt: new Date(row.created_at),
     };
   }
 
@@ -1083,6 +1184,39 @@ export class DatabaseService implements OnModuleInit {
     return results;
   }
 
+  async updateCompanyMemberStatus(
+    companyId: string,
+    memberId: string,
+    status: 'active' | 'invited' | 'suspended'
+  ): Promise<CompanyMemberEntity | null> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('company_members')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('company_id', companyId)
+          .eq('id', memberId)
+          .select()
+          .maybeSingle();
+
+        if (!error && data) {
+          const m = this.mapCompanyMember(data);
+          this.companyMembers.set(m.id, m);
+          return m;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase updateCompanyMemberStatus exception: ${err.message}`);
+      }
+    }
+
+    const m = this.companyMembers.get(memberId);
+    if (!m || m.companyId !== companyId) return null;
+    m.status = status;
+    m.updatedAt = new Date();
+    this.companyMembers.set(memberId, m);
+    return m;
+  }
+
   // --- AUDIT LOGS ---
   async recordAudit(data: Omit<AuditLogEntity, 'id' | 'createdAt'>): Promise<AuditLogEntity> {
     const id = randomUUID();
@@ -1297,6 +1431,7 @@ export class DatabaseService implements OnModuleInit {
           .insert({
             id,
             company_id: data.companyId,
+            user_id: data.userId || null,
             employee_number: normalizedNumber,
             first_name: data.firstName.trim(),
             last_name: data.lastName.trim(),
@@ -1306,6 +1441,7 @@ export class DatabaseService implements OnModuleInit {
             address: data.address,
             emergency_contact: data.emergencyContact,
             employment_status: data.employmentStatus,
+            account_status: data.accountStatus || 'invited',
             employment_start_date: data.employmentStartDate,
             employment_end_date: data.employmentEndDate || null,
           })
@@ -1326,11 +1462,38 @@ export class DatabaseService implements OnModuleInit {
       ...data,
       id,
       employeeNumber: normalizedNumber,
+      accountStatus: data.accountStatus || 'invited',
       createdAt: now,
       updatedAt: now,
     };
     this.employees.set(id, employee);
     return employee;
+  }
+
+  async findEmployeeByUserId(companyId: string, userId: string): Promise<EmployeeEntity | null> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('employees')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (!error && data) {
+          return this.mapEmployee(data);
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findEmployeeByUserId exception: ${err.message}`);
+      }
+    }
+
+    for (const emp of this.employees.values()) {
+      if (emp.companyId === companyId && emp.userId === userId) {
+        return emp;
+      }
+    }
+    return null;
   }
 
   async updateEmployee(
@@ -1346,6 +1509,8 @@ export class DatabaseService implements OnModuleInit {
         if (updates.email) dbUpdates.email = updates.email.toLowerCase().trim();
         if (updates.phone) dbUpdates.phone = updates.phone;
         if (updates.employmentStatus) dbUpdates.employment_status = updates.employmentStatus;
+        if (updates.accountStatus) dbUpdates.account_status = updates.accountStatus;
+        if (updates.userId !== undefined) dbUpdates.user_id = updates.userId;
         if (updates.address) dbUpdates.address = updates.address;
         if (updates.emergencyContact) dbUpdates.emergency_contact = updates.emergencyContact;
 
@@ -2415,6 +2580,80 @@ export class DatabaseService implements OnModuleInit {
           if (site && jobType) {
             results.push({
               ...a,
+              siteJob: { ...siteJob, site, jobType },
+            });
+          }
+        }
+      }
+    }
+    return results.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+  }
+
+  async findCompanyAssignments(
+    companyId: string,
+    options?: { siteId?: string; status?: string }
+  ): Promise<Array<AssignmentEntity & {
+    employee?: EmployeeEntity;
+    siteJob: SiteJobEntity & { site: SiteEntity; jobType: JobTypeEntity };
+  }>> {
+    const results: Array<AssignmentEntity & {
+      employee?: EmployeeEntity;
+      siteJob: SiteJobEntity & { site: SiteEntity; jobType: JobTypeEntity };
+    }> = [];
+
+    if (this.supabase) {
+      try {
+        let query = this.supabase
+          .from('assignments')
+          .select('*, employees(*), site_jobs(*, sites(*), job_types(*))')
+          .eq('company_id', companyId);
+
+        if (options?.status && options.status !== 'all') {
+          query = query.eq('status', options.status);
+        }
+
+        const { data, error } = await query;
+        if (!error && data) {
+          for (const row of data) {
+            const assignment = this.mapAssignment(row);
+            const employee = row.employees ? this.mapEmployee(row.employees) : undefined;
+            if (row.site_jobs && row.site_jobs.sites && row.site_jobs.job_types) {
+              const sj = this.mapSiteJob(row.site_jobs);
+              const site = this.mapSite(row.site_jobs.sites);
+              const jt = this.mapJobType(row.site_jobs.job_types);
+              if (!options?.siteId || options.siteId === site.id) {
+                results.push({
+                  ...assignment,
+                  employee,
+                  siteJob: { ...sj, site, jobType: jt },
+                });
+              }
+            }
+          }
+          return results.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findCompanyAssignments exception: ${err.message}`);
+      }
+    }
+
+    for (const a of this.assignments.values()) {
+      if (a.companyId === companyId) {
+        if (options?.status && options.status !== 'all' && a.status !== options.status) {
+          continue;
+        }
+        const siteJob = await this.findSiteJobById(companyId, a.siteJobId);
+        if (siteJob) {
+          if (options?.siteId && siteJob.siteId !== options.siteId) {
+            continue;
+          }
+          const site = await this.findSiteById(companyId, siteJob.siteId);
+          const jobType = await this.findJobTypeById(companyId, siteJob.jobTypeId);
+          const employee = await this.findEmployeeById(companyId, a.employeeId);
+          if (site && jobType) {
+            results.push({
+              ...a,
+              employee: employee || undefined,
               siteJob: { ...siteJob, site, jobType },
             });
           }
@@ -4754,6 +4993,556 @@ export class DatabaseService implements OnModuleInit {
     }
 
     return Array.from(this.invoiceItems.values()).filter((item) => item.invoiceId === invoiceId);
+  }
+
+  // --- INVITATION OPERATIONS (SPEC SECTION 11, 16) ---
+  async createInvitation(
+    data: Omit<InvitationEntity, 'id' | 'createdAt' | 'updatedAt'>
+  ): Promise<InvitationEntity> {
+    const id = randomUUID();
+    const now = new Date();
+
+    if (this.supabase) {
+      try {
+        const { data: inserted, error } = await this.supabase
+          .from('invitations')
+          .insert({
+            id,
+            company_id: data.companyId,
+            email: data.email.toLowerCase().trim(),
+            role: data.role,
+            target_type: data.targetType,
+            target_id: data.targetId || null,
+            token_hash: data.tokenHash,
+            status: data.status || 'pending',
+            expires_at: data.expiresAt.toISOString(),
+            invited_by: data.invitedBy || null,
+          })
+          .select()
+          .single();
+
+        if (!error && inserted) {
+          const inv = this.mapInvitation(inserted);
+          this.invitations.set(inv.id, inv);
+          return inv;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase createInvitation exception: ${err.message}`);
+      }
+    }
+
+    const invitation: InvitationEntity = {
+      ...data,
+      id,
+      email: data.email.toLowerCase().trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.invitations.set(id, invitation);
+    return invitation;
+  }
+
+  async findInvitationByTokenHash(tokenHash: string): Promise<InvitationEntity | null> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('invitations')
+          .select('*')
+          .eq('token_hash', tokenHash)
+          .maybeSingle();
+
+        if (!error && data) {
+          return this.mapInvitation(data);
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findInvitationByTokenHash exception: ${err.message}`);
+      }
+    }
+
+    for (const inv of this.invitations.values()) {
+      if (inv.tokenHash === tokenHash) {
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  async findInvitationsByCompany(companyId: string): Promise<InvitationEntity[]> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('invitations')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          return data.map((d: any) => this.mapInvitation(d));
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findInvitationsByCompany exception: ${err.message}`);
+      }
+    }
+
+    return Array.from(this.invitations.values())
+      .filter((inv) => inv.companyId === companyId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async updateInvitationStatus(
+    id: string,
+    status: InvitationStatus,
+    acceptedAt?: Date
+  ): Promise<void> {
+    if (this.supabase) {
+      try {
+        await this.supabase
+          .from('invitations')
+          .update({
+            status,
+            accepted_at: acceptedAt ? acceptedAt.toISOString() : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id);
+      } catch (err: any) {
+        this.logger.error(`Supabase updateInvitationStatus exception: ${err.message}`);
+      }
+    }
+
+    const inv = this.invitations.get(id);
+    if (inv) {
+      inv.status = status;
+      if (acceptedAt) inv.acceptedAt = acceptedAt;
+      inv.updatedAt = new Date();
+      this.invitations.set(id, inv);
+    }
+  }
+
+  async deleteInvitation(id: string): Promise<void> {
+    if (this.supabase) {
+      try {
+        await this.supabase.from('invitations').delete().eq('id', id);
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteInvitation exception: ${err.message}`);
+      }
+    }
+    this.invitations.delete(id);
+  }
+
+  // --- USER DEVICE OPERATIONS (SPEC SECTION 28) ---
+  async createUserDevice(
+    data: Omit<UserDeviceEntity, 'id' | 'createdAt'>
+  ): Promise<UserDeviceEntity> {
+    const id = randomUUID();
+    const now = new Date();
+
+    if (this.supabase) {
+      try {
+        const { data: inserted, error } = await this.supabase
+          .from('user_devices')
+          .insert({
+            id,
+            user_id: data.userId,
+            device_type: data.deviceType,
+            platform: data.platform || null,
+            push_token: data.pushToken,
+            last_seen_at: data.lastSeenAt.toISOString(),
+          })
+          .select()
+          .single();
+
+        if (!error && inserted) {
+          const dev = this.mapUserDevice(inserted);
+          this.userDevices.set(dev.id, dev);
+          return dev;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase createUserDevice exception: ${err.message}`);
+      }
+    }
+
+    const device: UserDeviceEntity = {
+      ...data,
+      id,
+      createdAt: now,
+    };
+    this.userDevices.set(id, device);
+    return device;
+  }
+
+  async findUserDevices(userId: string): Promise<UserDeviceEntity[]> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('user_devices')
+          .select('*')
+          .eq('user_id', userId)
+          .is('revoked_at', null);
+
+        if (!error && data) {
+          return data.map((d: any) => this.mapUserDevice(d));
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findUserDevices exception: ${err.message}`);
+      }
+    }
+
+    return Array.from(this.userDevices.values()).filter(
+      (d) => d.userId === userId && !d.revokedAt
+    );
+  }
+
+  async revokeUserDevice(id: string): Promise<void> {
+    if (this.supabase) {
+      try {
+        await this.supabase
+          .from('user_devices')
+          .update({ revoked_at: new Date().toISOString() })
+          .eq('id', id);
+      } catch (err: any) {
+        this.logger.error(`Supabase revokeUserDevice exception: ${err.message}`);
+      }
+    }
+
+    const dev = this.userDevices.get(id);
+    if (dev) {
+      dev.revokedAt = new Date();
+      this.userDevices.set(id, dev);
+    }
+  }
+
+  // --- CHAT OPERATIONS (REAL-TIME CONVERSATIONS & MESSAGES) ---
+  async findChatConversations(companyId: string, employeeId?: string): Promise<ChatConversationEntity[]> {
+    if (this.supabase) {
+      try {
+        let query = this.supabase
+          .from('chat_conversations')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('last_message_at', { ascending: false });
+
+        if (employeeId) {
+          query = query.eq('employee_id', employeeId);
+        }
+
+        const { data, error } = await query;
+        if (!error && data) {
+          return data.map((r: any) => ({
+            id: r.id,
+            companyId: r.company_id,
+            employeeId: r.employee_id,
+            createdBy: r.created_by,
+            lastMessageAt: new Date(r.last_message_at),
+            lastMessagePreview: r.last_message_preview,
+            createdAt: new Date(r.created_at),
+            updatedAt: new Date(r.updated_at),
+          }));
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findChatConversations exception: ${err.message}`);
+      }
+    }
+
+    return Array.from(this.chatConversations.values())
+      .filter((c) => c.companyId === companyId && (!employeeId || c.employeeId === employeeId))
+      .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
+  }
+
+  async findChatConversationById(companyId: string, id: string): Promise<ChatConversationEntity | null> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('chat_conversations')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            companyId: data.company_id,
+            employeeId: data.employee_id,
+            createdBy: data.created_by,
+            lastMessageAt: new Date(data.last_message_at),
+            lastMessagePreview: data.last_message_preview,
+            createdAt: new Date(data.created_at),
+            updatedAt: new Date(data.updated_at),
+          };
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findChatConversationById exception: ${err.message}`);
+      }
+    }
+
+    const conv = this.chatConversations.get(id);
+    return conv && conv.companyId === companyId ? conv : null;
+  }
+
+  async findChatConversationByEmployee(companyId: string, employeeId: string): Promise<ChatConversationEntity | null> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('chat_conversations')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('employee_id', employeeId)
+          .maybeSingle();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            companyId: data.company_id,
+            employeeId: data.employee_id,
+            createdBy: data.created_by,
+            lastMessageAt: new Date(data.last_message_at),
+            lastMessagePreview: data.last_message_preview,
+            createdAt: new Date(data.created_at),
+            updatedAt: new Date(data.updated_at),
+          };
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findChatConversationByEmployee exception: ${err.message}`);
+      }
+    }
+
+    for (const conv of this.chatConversations.values()) {
+      if (conv.companyId === companyId && conv.employeeId === employeeId) {
+        return conv;
+      }
+    }
+    return null;
+  }
+
+  async createChatConversation(data: Partial<ChatConversationEntity>): Promise<ChatConversationEntity> {
+    const id = data.id || randomUUID();
+    const now = new Date();
+    const entity: ChatConversationEntity = {
+      id,
+      companyId: data.companyId!,
+      employeeId: data.employeeId!,
+      createdBy: data.createdBy,
+      lastMessageAt: data.lastMessageAt || now,
+      lastMessagePreview: data.lastMessagePreview || '',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (this.supabase) {
+      try {
+        await this.supabase.from('chat_conversations').insert({
+          id: entity.id,
+          company_id: entity.companyId,
+          employee_id: entity.employeeId,
+          created_by: entity.createdBy,
+          last_message_at: entity.lastMessageAt.toISOString(),
+          last_message_preview: entity.lastMessagePreview,
+          created_at: entity.createdAt.toISOString(),
+          updated_at: entity.updatedAt.toISOString(),
+        });
+      } catch (err: any) {
+        this.logger.error(`Supabase createChatConversation exception: ${err.message}`);
+      }
+    }
+
+    this.chatConversations.set(id, entity);
+    return entity;
+  }
+
+  async updateChatConversation(
+    companyId: string,
+    id: string,
+    updates: Partial<ChatConversationEntity>
+  ): Promise<ChatConversationEntity | null> {
+    const existing = await this.findChatConversationById(companyId, id);
+    if (!existing) return null;
+
+    const updated: ChatConversationEntity = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+
+    if (this.supabase) {
+      try {
+        await this.supabase
+          .from('chat_conversations')
+          .update({
+            last_message_at: updated.lastMessageAt.toISOString(),
+            last_message_preview: updated.lastMessagePreview,
+            updated_at: updated.updatedAt.toISOString(),
+          })
+          .eq('id', id);
+      } catch (err: any) {
+        this.logger.error(`Supabase updateChatConversation exception: ${err.message}`);
+      }
+    }
+
+    this.chatConversations.set(id, updated);
+    return updated;
+  }
+
+  async findChatMessages(companyId: string, conversationId: string, limit = 100): Promise<ChatMessageEntity[]> {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: true })
+          .limit(limit);
+
+        if (!error && data) {
+          return data.map((r: any) => ({
+            id: r.id,
+            conversationId: r.conversation_id,
+            companyId: r.company_id,
+            senderId: r.sender_id,
+            senderRole: r.sender_role,
+            senderName: r.sender_name,
+            content: r.content,
+            isRead: Boolean(r.is_read),
+            readAt: r.read_at ? new Date(r.read_at) : undefined,
+            createdAt: new Date(r.created_at),
+          }));
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findChatMessages exception: ${err.message}`);
+      }
+    }
+
+    return Array.from(this.chatMessages.values())
+      .filter((m) => m.companyId === companyId && m.conversationId === conversationId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .slice(-limit);
+  }
+
+  async createChatMessage(data: Partial<ChatMessageEntity>): Promise<ChatMessageEntity> {
+    const id = data.id || randomUUID();
+    const now = new Date();
+    const entity: ChatMessageEntity = {
+      id,
+      conversationId: data.conversationId!,
+      companyId: data.companyId!,
+      senderId: data.senderId!,
+      senderRole: data.senderRole!,
+      senderName: data.senderName!,
+      content: data.content!,
+      isRead: false,
+      readAt: undefined,
+      createdAt: now,
+    };
+
+    if (this.supabase) {
+      try {
+        await this.supabase.from('chat_messages').insert({
+          id: entity.id,
+          conversation_id: entity.conversationId,
+          company_id: entity.companyId,
+          sender_id: entity.senderId,
+          sender_role: entity.senderRole,
+          sender_name: entity.senderName,
+          content: entity.content,
+          is_read: entity.isRead,
+          created_at: entity.createdAt.toISOString(),
+        });
+      } catch (err: any) {
+        this.logger.error(`Supabase createChatMessage exception: ${err.message}`);
+      }
+    }
+
+    this.chatMessages.set(id, entity);
+
+    // Automatically touch the conversation's last_message_at and preview
+    await this.updateChatConversation(entity.companyId, entity.conversationId, {
+      lastMessageAt: now,
+      lastMessagePreview: entity.content.substring(0, 100),
+    });
+
+    return entity;
+  }
+
+  async markChatMessagesAsRead(
+    companyId: string,
+    conversationId: string,
+    readerRole: 'COMPANY' | 'EMPLOYEE'
+  ): Promise<void> {
+    const targetSenderRole = readerRole === 'COMPANY' ? 'EMPLOYEE' : 'COMPANY';
+    const now = new Date();
+
+    if (this.supabase) {
+      try {
+        await this.supabase
+          .from('chat_messages')
+          .update({ is_read: true, read_at: now.toISOString() })
+          .eq('company_id', companyId)
+          .eq('conversation_id', conversationId)
+          .eq('sender_role', targetSenderRole)
+          .eq('is_read', false);
+      } catch (err: any) {
+        this.logger.error(`Supabase markChatMessagesAsRead exception: ${err.message}`);
+      }
+    }
+
+    for (const msg of this.chatMessages.values()) {
+      if (
+        msg.companyId === companyId &&
+        msg.conversationId === conversationId &&
+        msg.senderRole === targetSenderRole &&
+        !msg.isRead
+      ) {
+        msg.isRead = true;
+        msg.readAt = now;
+        this.chatMessages.set(msg.id, msg);
+      }
+    }
+  }
+
+  async getUnreadChatCount(companyId: string, role: 'COMPANY' | 'EMPLOYEE', employeeId?: string): Promise<number> {
+    const targetSenderRole = role === 'COMPANY' ? 'EMPLOYEE' : 'COMPANY';
+
+    if (this.supabase) {
+      try {
+        let query = this.supabase
+          .from('chat_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('sender_role', targetSenderRole)
+          .eq('is_read', false);
+
+        if (role === 'EMPLOYEE' && employeeId) {
+          const conv = await this.findChatConversationByEmployee(companyId, employeeId);
+          if (conv) {
+            query = query.eq('conversation_id', conv.id);
+          } else {
+            return 0;
+          }
+        }
+
+        const { count, error } = await query;
+        if (!error && typeof count === 'number') {
+          return count;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase getUnreadChatCount exception: ${err.message}`);
+      }
+    }
+
+    let unreadCount = 0;
+    for (const msg of this.chatMessages.values()) {
+      if (msg.companyId === companyId && msg.senderRole === targetSenderRole && !msg.isRead) {
+        if (role === 'EMPLOYEE' && employeeId) {
+          const conv = this.chatConversations.get(msg.conversationId);
+          if (conv && conv.employeeId === employeeId) {
+            unreadCount++;
+          }
+        } else {
+          unreadCount++;
+        }
+      }
+    }
+    return unreadCount;
   }
 }
 

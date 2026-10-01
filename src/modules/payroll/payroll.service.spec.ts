@@ -149,7 +149,7 @@ describe('PayrollService', () => {
         mockUserId
       );
 
-      expect(updated.status).toBe('paid');
+      expect(updated!.status).toBe('paid');
       expect(db.updatePayslip).toHaveBeenCalledWith(mockCompanyId, 'ps-101', { status: 'paid' });
       expect(db.updateTimesheet).toHaveBeenCalledWith(mockCompanyId, 'ts-101', { status: 'locked' });
       expect(db.recordAudit).toHaveBeenCalledWith(

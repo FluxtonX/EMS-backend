@@ -86,7 +86,7 @@
       "**/*.(t|j)s"
     ],
     "transformIgnorePatterns": [
-      "/node_modules/(?!(@nestjs/jwt|@nestjs/config)/)"
+      "/node_modules/(?!(@nestjs/jwt|@nestjs/config|@nestjs/passport)/)"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"

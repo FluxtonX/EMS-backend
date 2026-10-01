@@ -171,7 +171,7 @@ describe('TimesheetsService', () => {
         mockSupervisorId
       );
 
-      expect(adjusted.adjustmentMinutes).toBe(60);
+      expect(adjusted!.adjustmentMinutes).toBe(60);
       expect(db.recordAudit).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'timesheet:adjust_hours',
@@ -220,7 +220,7 @@ describe('TimesheetsService', () => {
         mockSupervisorId
       );
 
-      expect(result.status).toBe('approved');
+      expect(result!.status).toBe('approved');
       expect(db.recordAudit).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'timesheet:approved',

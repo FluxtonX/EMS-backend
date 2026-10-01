@@ -1,7 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
-import { Role } from '../enums/role.enum';
+import { Role, normalizeRole } from '../enums/role.enum';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -24,7 +24,8 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('User lacks required role credentials.');
     }
 
-    const hasRole = requiredRoles.includes(user.role as Role);
+    const userRoleNormalized = normalizeRole(user.role);
+    const hasRole = requiredRoles.some((r) => normalizeRole(r) === userRoleNormalized);
     if (!hasRole) {
       throw new ForbiddenException(
         `Action restricted. Requires one of roles: [${requiredRoles.join(', ')}]. Current role: ${user.role}`

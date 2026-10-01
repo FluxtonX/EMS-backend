@@ -82,6 +82,10 @@ export class AssignmentsService {
     return assignment;
   }
 
+  async findAll(companyId: string, options?: { siteId?: string; status?: string }) {
+    return this.db.findCompanyAssignments(companyId, options);
+  }
+
   async getEmployeeAssignments(companyId: string, employeeId: string) {
     const employee = await this.db.findEmployeeById(companyId, employeeId);
     if (!employee) {

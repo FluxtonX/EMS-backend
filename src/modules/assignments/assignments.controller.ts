@@ -5,6 +5,7 @@ import {
   Patch,
   Param,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -26,6 +27,16 @@ import { Permission } from '../../common/enums/permission.enum';
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard, TenantGuard)
 export class AssignmentsController {
   constructor(private readonly assignmentsService: AssignmentsService) {}
+
+  @Get()
+  @RequirePermissions(Permission.ASSIGNMENT_VIEW)
+  async findAll(
+    @TenantId() companyId: string,
+    @Query('siteId') siteId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.assignmentsService.findAll(companyId, { siteId, status });
+  }
 
   @Post()
   @RequirePermissions(Permission.ASSIGNMENT_MANAGE)

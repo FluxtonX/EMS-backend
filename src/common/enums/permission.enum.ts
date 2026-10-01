@@ -1,4 +1,4 @@
-import { Role } from './role.enum';
+import { Role, normalizeRole } from './role.enum';
 
 export enum Permission {
   // Company & Members
@@ -193,6 +193,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 };
 
-export function getPermissionsForRole(role: Role): Permission[] {
-  return ROLE_PERMISSIONS[role] || [];
+export function getPermissionsForRole(role: Role | string): Permission[] {
+  const normalized = normalizeRole(role as any);
+  return ROLE_PERMISSIONS[normalized] || [];
 }

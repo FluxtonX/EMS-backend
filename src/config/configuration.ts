@@ -28,4 +28,10 @@ export default () => ({
     ttl: parseInt(process.env.THROTTLE_TTL || '60', 10),
     limit: parseInt(process.env.THROTTLE_LIMIT || '100', 10),
   },
+  brevo: {
+    apiKey: process.env.BREVO_API_KEY || '',
+    senderEmail: process.env.BREVO_SENDER_EMAIL || 'notifications@workforce.co.uk',
+    senderName: process.env.BREVO_SENDER_NAME || 'Workforce Platform',
+    appUrl: process.env.APP_URL || 'http://localhost:3000',
+  },
 });

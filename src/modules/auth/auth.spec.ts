@@ -73,6 +73,7 @@ describe('Phase 1: Authentication + Company + RBAC Tests', () => {
       password: 'SecurePassword123!',
       firstName: 'Arthur',
       lastName: 'Pendleton',
+      phone: '+447000111222',
     });
 
     expect(res).toBeDefined();
@@ -94,6 +95,7 @@ describe('Phase 1: Authentication + Company + RBAC Tests', () => {
       password: 'Password123!',
       firstName: 'Alice',
       lastName: 'Smith',
+      phone: '+447000111333',
     });
 
     await expect(
@@ -103,6 +105,7 @@ describe('Phase 1: Authentication + Company + RBAC Tests', () => {
         password: 'Password123!',
         firstName: 'Bob',
         lastName: 'Jones',
+        phone: '+447000111444',
       })
     ).rejects.toThrow(ConflictException);
   });
@@ -114,6 +117,7 @@ describe('Phase 1: Authentication + Company + RBAC Tests', () => {
       password: 'StrongPassword456!',
       firstName: 'Elena',
       lastName: 'Rostova',
+      phone: '+447000111555',
     });
 
     // Valid login

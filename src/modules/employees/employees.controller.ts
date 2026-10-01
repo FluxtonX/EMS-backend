@@ -14,6 +14,7 @@ import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { QueryEmployeesDto } from './dto/query-employees.dto';
+import { OnboardEmployeeDto } from './dto/onboard-employee.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -44,6 +45,28 @@ export class EmployeesController {
     @Param('id') id: string
   ) {
     return this.employeesService.findById(companyId, id);
+  }
+
+  @Post('onboard')
+  @Roles(Role.Owner, Role.Admin, Role.Manager)
+  @HttpCode(HttpStatus.CREATED)
+  async onboard(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() dto: OnboardEmployeeDto
+  ) {
+    return this.employeesService.onboard(companyId, actor.id, actor.email, dto);
+  }
+
+  @Post(':id/resend-invite')
+  @Roles(Role.Owner, Role.Admin, Role.Manager)
+  @HttpCode(HttpStatus.OK)
+  async resendInvite(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return this.employeesService.resendInvite(companyId, actor.id, id);
   }
 
   @Post()

@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -11,6 +12,7 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ActivateInvitationDto } from './dto/activate-invitation.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -36,6 +38,17 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() dto: RefreshTokenDto) {
     return this.authService.refreshToken(dto.refreshToken);
+  }
+
+  @Get('invitations/details')
+  async getInvitationDetails(@Query('token') token: string) {
+    return this.authService.getInvitationDetails(token);
+  }
+
+  @Post('invitations/activate')
+  @HttpCode(HttpStatus.OK)
+  async activateInvitation(@Body() dto: ActivateInvitationDto) {
+    return this.authService.activateInvitation(dto);
   }
 
   @Get('me')

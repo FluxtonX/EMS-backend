@@ -21,6 +21,6 @@ export class RegisterDto {
   lastName: string;
 
   @IsString()
-  @IsOptional()
-  phone?: string;
+  @IsNotEmpty({ message: 'Phone number is required' })
+  phone: string;
 }

@@ -77,6 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DE
 CREATE TABLE IF NOT EXISTS employees (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   employee_number TEXT NOT NULL,
   first_name TEXT NOT NULL,
   last_name TEXT NOT NULL,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS employees (
   address JSONB NOT NULL DEFAULT '{}'::jsonb,
   emergency_contact JSONB NOT NULL DEFAULT '{}'::jsonb,
   employment_status TEXT NOT NULL DEFAULT 'active' CHECK (employment_status IN ('active', 'probation', 'suspended', 'terminated', 'on_leave')),
+  account_status TEXT NOT NULL DEFAULT 'invited' CHECK (account_status IN ('invited', 'active', 'suspended', 'disabled')),
   employment_start_date DATE NOT NULL,
   employment_end_date DATE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -93,8 +95,18 @@ CREATE TABLE IF NOT EXISTS employees (
   CONSTRAINT uq_company_employee_number UNIQUE (company_id, employee_number)
 );
 
+-- Idempotent column assertions for existing databases
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'invited';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS date_of_birth DATE DEFAULT '1990-01-01';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS address JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_employees_company_id ON employees(company_id);
+CREATE INDEX IF NOT EXISTS idx_employees_user_id ON employees(user_id);
 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(company_id, employment_status);
+CREATE INDEX IF NOT EXISTS idx_employees_account_status ON employees(company_id, account_status);
 CREATE INDEX IF NOT EXISTS idx_employees_number ON employees(company_id, employee_number);
 
 -- 6. EMPLOYEE LICENCES (SIA / COMPLIANCE TRACKING - SECTION 42)
@@ -330,6 +342,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_notifications_user_status ON notifications(company_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(company_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(company_id, type);
@@ -522,5 +536,71 @@ CREATE TABLE IF NOT EXISTS invoice_items (
 
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 
+-- 19. INVITATIONS (SECURE TOKEN-BASED ONBOARDING - SPEC SECTIONS 11, 16)
+CREATE TABLE IF NOT EXISTS invitations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('OWNER', 'MANAGER', 'OPERATOR', 'EMPLOYEE', 'Owner', 'Admin', 'Manager', 'Supervisor', 'Employee')),
+  target_type TEXT NOT NULL CHECK (target_type IN ('team_member', 'employee')),
+  target_id UUID, -- References employees(id) if target_type = 'employee'
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'accepted', 'expired', 'cancelled')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  accepted_at TIMESTAMPTZ,
+  invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
+CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON invitations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_invitations_company ON invitations(company_id, status);
+CREATE INDEX IF NOT EXISTS idx_invitations_email ON invitations(email);
 
+-- 20. USER DEVICES (PUSH NOTIFICATIONS - SPEC SECTION 28)
+CREATE TABLE IF NOT EXISTS user_devices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_type TEXT NOT NULL CHECK (device_type IN ('web', 'android', 'ios')),
+  platform TEXT,
+  push_token TEXT NOT NULL,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id) WHERE revoked_at IS NULL;
+
+-- 21. CHAT CONVERSATIONS (COMPANY & EMPLOYEE REAL-TIME MESSAGING)
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_message_preview TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_company_employee_chat UNIQUE (company_id, employee_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_company ON chat_conversations(company_id, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_employee ON chat_conversations(employee_id);
+
+-- 22. CHAT MESSAGES
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  sender_id UUID NOT NULL,
+  sender_role TEXT NOT NULL CHECK (sender_role IN ('COMPANY', 'EMPLOYEE')),
+  sender_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_unread ON chat_messages(conversation_id, is_read) WHERE is_read = false;
+CREATE INDEX IF NOT EXISTS idx_chat_messages_company ON chat_messages(company_id);

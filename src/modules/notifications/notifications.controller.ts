@@ -119,4 +119,40 @@ export class NotificationsController {
   ) {
     return this.notificationsService.delete(companyId, id);
   }
+
+  /**
+   * POST /api/v1/notifications/devices
+   * Register a user device token for web/mobile push
+   */
+  @Post('devices')
+  @HttpCode(HttpStatus.CREATED)
+  async registerDevice(
+    @CurrentUser('id') userId: string,
+    @Body() dto: { deviceType: 'web' | 'android' | 'ios'; platform?: string; pushToken: string }
+  ) {
+    return this.notificationsService.registerDevice(userId, dto);
+  }
+
+  /**
+   * GET /api/v1/notifications/devices
+   * List active devices for current user
+   */
+  @Get('devices')
+  async getDevices(
+    @CurrentUser('id') userId: string
+  ) {
+    return this.notificationsService.getUserDevices(userId);
+  }
+
+  /**
+   * DELETE /api/v1/notifications/devices/:token
+   * Revoke device push token on logout
+   */
+  @Delete('devices/:token')
+  async revokeDevice(
+    @CurrentUser('id') userId: string,
+    @Param('token') token: string
+  ) {
+    return this.notificationsService.revokeDevice(userId, token);
+  }
 }

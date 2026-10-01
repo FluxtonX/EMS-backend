@@ -23,6 +23,9 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { TimesheetsModule } from './modules/timesheets/timesheets.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
 import { ClientsModule } from './modules/clients/clients.module';
+import { TeamModule } from './modules/team/team.module';
+import { MeModule } from './modules/me/me.module';
+import { ChatModule } from './modules/chat/chat.module';
 
 @Module({
   imports: [
@@ -58,6 +61,9 @@ import { ClientsModule } from './modules/clients/clients.module';
     TimesheetsModule,
     PayrollModule,
     ClientsModule,
+    TeamModule,
+    MeModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [

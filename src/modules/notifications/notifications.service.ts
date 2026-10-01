@@ -280,4 +280,47 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
 
     return { scanned: employeesResult.items.length, alertsCreated };
   }
+
+  /**
+   * Register a user device push token for push notifications (Spec Section 28)
+   */
+  async registerDevice(userId: string, dto: { deviceType: 'web' | 'android' | 'ios'; platform?: string; pushToken: string }) {
+    const devices = await this.db.findUserDevices(userId);
+    const existing = devices.find((d) => d.pushToken === dto.pushToken);
+    if (existing) {
+      this.logger.log(`Device push token already registered for user ${userId}`);
+      return existing;
+    }
+
+    const device = await this.db.createUserDevice({
+      userId,
+      deviceType: dto.deviceType,
+      platform: dto.platform,
+      pushToken: dto.pushToken,
+      lastSeenAt: new Date(),
+    });
+    this.logger.log(`Registered device token (${dto.deviceType}) for user ${userId}`);
+    return device;
+  }
+
+  /**
+   * Revoke device token on logout
+   */
+  async revokeDevice(userId: string, pushToken: string) {
+    const devices = await this.db.findUserDevices(userId);
+    const device = devices.find((d) => d.pushToken === pushToken);
+    if (device) {
+      await this.db.revokeUserDevice(device.id);
+      this.logger.log(`Revoked device token for user ${userId}`);
+      return { success: true, message: 'Device token revoked' };
+    }
+    return { success: false, message: 'Device not found' };
+  }
+
+  /**
+   * Get active registered devices for user
+   */
+  async getUserDevices(userId: string) {
+    return this.db.findUserDevices(userId);
+  }
 }
