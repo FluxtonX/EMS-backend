@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { TeamService } from './team.service';
 import { InviteTeamMemberDto, UpdateMemberStatusDto } from './dto/invite-team-member.dto';
+import { CreateManualTeamMemberDto } from './dto/create-manual-team-member.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
@@ -41,6 +42,17 @@ export class TeamController {
     @Body() dto: InviteTeamMemberDto
   ) {
     return this.teamService.inviteTeamMember(companyId, actor.id, actor.role, dto);
+  }
+
+  @Post('manual')
+  @Roles(Role.Owner, Role.Admin)
+  @HttpCode(HttpStatus.CREATED)
+  async createManualTeamMember(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() dto: CreateManualTeamMemberDto
+  ) {
+    return this.teamService.createManualTeamMember(companyId, actor.id, actor.role, dto);
   }
 
   @Post('invitations/:id/resend')

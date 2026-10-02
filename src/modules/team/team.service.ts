@@ -9,8 +9,10 @@ import {
 import { DatabaseService } from '../../database/database.service';
 import { BrevoService } from '../notifications/brevo.service';
 import { InviteTeamMemberDto, UpdateMemberStatusDto } from './dto/invite-team-member.dto';
+import { CreateManualTeamMemberDto } from './dto/create-manual-team-member.dto';
 import { Role, normalizeRole } from '../../common/enums/role.enum';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class TeamService {
@@ -162,6 +164,112 @@ export class TeamService {
         role: invitation.role,
         status: invitation.status,
         expiresAt: invitation.expiresAt,
+      },
+    };
+  }
+
+  /**
+   * Owner manually creates a new internal management team member (Manager or Operator)
+   * with immediate active credentials.
+   */
+  async createManualTeamMember(
+    companyId: string,
+    actorId: string,
+    actorRole: string,
+    dto: CreateManualTeamMemberDto
+  ) {
+    const normalizedActorRole = normalizeRole(actorRole);
+    if (normalizedActorRole !== Role.Owner && normalizedActorRole !== Role.Admin) {
+      throw new ForbiddenException('Only the Company Owner can add team members manually.');
+    }
+
+    const normalizedRole = normalizeRole(dto.role);
+    if (normalizedRole === Role.Employee) {
+      throw new BadRequestException('Use the Employee onboarding wizard to create employees.');
+    }
+    if (normalizedRole === Role.Owner) {
+      throw new BadRequestException('Company Owner cannot be created via manual team creation.');
+    }
+
+    const company = await this.db.findCompanyById(companyId);
+    if (!company) {
+      throw new NotFoundException(`Company '${companyId}' not found.`);
+    }
+
+    const email = dto.email.toLowerCase().trim();
+
+    // Check if user already exists
+    const existingUser = await this.db.findUserByEmail(email);
+    if (existingUser) {
+      const existingMembership = await this.db.findCompanyMember(companyId, existingUser.id);
+      if (existingMembership) {
+        throw new ConflictException(
+          `User '${email}' is already an active member of this company with role ${existingMembership.role}.`
+        );
+      }
+      throw new ConflictException(
+        `A user with email '${email}' already exists in the system. Use the invitation tab to add them to your team.`
+      );
+    }
+
+    // Hash password with bcrypt (10 salt rounds)
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(dto.password, saltRounds);
+
+    // Create user entity
+    const user = await this.db.createUser({
+      email,
+      passwordHash,
+      firstName: dto.firstName.trim(),
+      lastName: dto.lastName.trim(),
+      phone: dto.phone ? dto.phone.trim() : undefined,
+      isActive: true,
+    });
+
+    // Create company membership with active status
+    const member = await this.db.createCompanyMember({
+      companyId,
+      userId: user.id,
+      role: normalizedRole,
+      status: 'active',
+    });
+
+    // Clean up any stale pending invitation for this email in this company
+    const companyInvitations = await this.db.findInvitationsByCompany(companyId);
+    const pendingInvite = companyInvitations.find(
+      (inv) => inv.email.toLowerCase() === email && inv.status === 'pending'
+    );
+    if (pendingInvite) {
+      await this.db.updateInvitationStatus(pendingInvite.id, 'accepted');
+    }
+
+    // Record audit log entry
+    await this.db.recordAudit({
+      companyId,
+      userId: actorId,
+      action: 'TEAM_MEMBER_CREATED_MANUALLY',
+      entity: 'company_members',
+      entityId: member.id,
+      newValue: {
+        userId: user.id,
+        email,
+        role: normalizedRole,
+        firstName: dto.firstName.trim(),
+        lastName: dto.lastName.trim(),
+      },
+    });
+
+    return {
+      message: `Team member ${dto.firstName} ${dto.lastName} (${dto.role}) created successfully.`,
+      member: {
+        id: member.id,
+        userId: user.id,
+        name: `${user.firstName} ${user.lastName}`.trim(),
+        email: user.email,
+        phone: user.phone || null,
+        role: member.role,
+        status: member.status,
+        joinedAt: member.createdAt,
       },
     };
   }
