@@ -3,6 +3,7 @@ export enum Role {
   Admin = 'Admin',
   Manager = 'Manager',
   Supervisor = 'Supervisor',
+  Operator = 'Supervisor',
   Employee = 'Employee',
 
   // Canonical Spec Roles (Spec Section 4: OWNER, MANAGER, OPERATOR, EMPLOYEE)

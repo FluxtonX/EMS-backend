@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Query,
   Body,
@@ -12,7 +13,9 @@ import {
 } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
+import { UpdateClientDto } from './dto/update-client.dto';
 import { CreateContractDto } from './dto/create-contract.dto';
+import { UpdateContractDto } from './dto/update-contract.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoicesDto } from './dto/query-invoices.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -66,6 +69,25 @@ export class ClientsController {
     return this.clientsService.findClientById(companyId, id);
   }
 
+  @Patch(':id')
+  @RequirePermissions(Permission.CLIENT_MANAGE)
+  async updateClient(
+    @TenantId() companyId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateClientDto
+  ) {
+    return this.clientsService.updateClient(companyId, id, dto);
+  }
+
+  @Delete(':id')
+  @RequirePermissions(Permission.CLIENT_MANAGE)
+  async deleteClient(
+    @TenantId() companyId: string,
+    @Param('id') id: string
+  ) {
+    return this.clientsService.deleteClient(companyId, id);
+  }
+
   // --- Contracts Endpoints ---
 
   @Post('contracts/new')
@@ -87,6 +109,25 @@ export class ClientsController {
     @Query('status') status?: string
   ) {
     return this.clientsService.findAllContracts(companyId, { clientId, siteId, status });
+  }
+
+  @Patch('contracts/:id')
+  @RequirePermissions(Permission.CONTRACT_MANAGE)
+  async updateContract(
+    @TenantId() companyId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateContractDto
+  ) {
+    return this.clientsService.updateContract(companyId, id, dto);
+  }
+
+  @Delete('contracts/:id')
+  @RequirePermissions(Permission.CONTRACT_MANAGE)
+  async deleteContract(
+    @TenantId() companyId: string,
+    @Param('id') id: string
+  ) {
+    return this.clientsService.deleteContract(companyId, id);
   }
 
   // --- Invoices Endpoints ---

@@ -7,6 +7,7 @@ import {
 import { DatabaseService } from '../../database/database.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { CreateJobTypeDto } from './dto/create-job-type.dto';
+import { UpdateJobTypeDto } from './dto/update-job-type.dto';
 import { AddSiteJobDto, UpdateSiteJobDto } from './dto/add-site-job.dto';
 
 @Injectable()
@@ -17,17 +18,22 @@ export class SitesService {
 
   // --- SITES ---
   async getSites(companyId: string) {
-    const sites = await this.db.findSites(companyId);
-    // Attach site jobs count to each site for operational overview
-    return Promise.all(
-      sites.map(async (s) => {
-        const jobs = await this.db.findSiteJobs(companyId, s.id);
-        return {
-          ...s,
-          configuredJobsCount: jobs.length,
-        };
-      })
-    );
+    const [sites, allJobs] = await Promise.all([
+      this.db.findSites(companyId),
+      this.db.findAllSiteJobs(companyId),
+    ]);
+
+    const countMap = new Map<string, number>();
+    for (const job of allJobs) {
+      if (job.siteId) {
+        countMap.set(job.siteId, (countMap.get(job.siteId) || 0) + 1);
+      }
+    }
+
+    return sites.map((s) => ({
+      ...s,
+      configuredJobsCount: countMap.get(s.id) || 0,
+    }));
   }
 
   async getSiteById(companyId: string, id: string) {
@@ -223,5 +229,109 @@ export class SitesService {
     });
 
     return updated;
+  }
+
+  async getSiteJobsMatrix(companyId: string) {
+    return this.db.findAllSiteJobs(companyId);
+  }
+
+  async deleteSiteJob(
+    companyId: string,
+    actorId: string,
+    siteId: string,
+    siteJobId: string
+  ) {
+    const sj = await this.db.findSiteJobById(companyId, siteJobId);
+    if (!sj || sj.siteId !== siteId) {
+      throw new NotFoundException(`Site Job rate configuration '${siteJobId}' not found.`);
+    }
+
+    const deleted = await this.db.deleteSiteJob(companyId, siteId, siteJobId);
+    if (!deleted) {
+      throw new NotFoundException(`Could not delete Site Job '${siteJobId}'.`);
+    }
+
+    await this.db.recordAudit({
+      companyId,
+      userId: actorId,
+      action: 'SITE_JOB_DELETED',
+      entity: 'site_jobs',
+      entityId: siteJobId,
+      oldValue: { siteId, jobTypeId: sj.jobTypeId, defaultPayRate: sj.defaultPayRate },
+    });
+
+    return { success: true, message: 'Site Job rate configuration deleted successfully.' };
+  }
+
+  async getJobTypeById(companyId: string, id: string) {
+    const jt = await this.db.findJobTypeById(companyId, id);
+    if (!jt) {
+      throw new NotFoundException(`Job type '${id}' not found.`);
+    }
+    return jt;
+  }
+
+  async updateJobType(
+    companyId: string,
+    actorId: string,
+    id: string,
+    dto: UpdateJobTypeDto
+  ) {
+    const existing = await this.db.findJobTypeById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Job type '${id}' not found.`);
+    }
+
+    if (dto.name && dto.name.trim().toLowerCase() !== existing.name.toLowerCase()) {
+      const duplicate = await this.db.findJobTypeByName(companyId, dto.name.trim());
+      if (duplicate && duplicate.id !== id) {
+        throw new ConflictException(`Job type '${dto.name}' already exists in your company.`);
+      }
+    }
+
+    const updated = await this.db.updateJobType(companyId, id, dto);
+    await this.db.recordAudit({
+      companyId,
+      userId: actorId,
+      action: 'JOB_TYPE_UPDATED',
+      entity: 'job_types',
+      entityId: id,
+      oldValue: { name: existing.name, isActive: existing.isActive },
+      newValue: dto,
+    });
+
+    return updated;
+  }
+
+  async deleteJobType(companyId: string, actorId: string, id: string) {
+    const existing = await this.db.findJobTypeById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Job type '${id}' not found.`);
+    }
+
+    // Check if any site jobs are using this job type
+    const allSiteJobs = await this.db.findAllSiteJobs(companyId);
+    const inUse = allSiteJobs.some((sj) => sj.jobTypeId === id);
+    if (inUse) {
+      throw new ConflictException(
+        `Cannot delete job role '${existing.name}' because it is assigned to one or more sites. Remove it from sites first.`
+      );
+    }
+
+    const deleted = await this.db.deleteJobType(companyId, id);
+    if (!deleted) {
+      throw new NotFoundException(`Could not delete Job type '${id}'.`);
+    }
+
+    await this.db.recordAudit({
+      companyId,
+      userId: actorId,
+      action: 'JOB_TYPE_DELETED',
+      entity: 'job_types',
+      entityId: id,
+      oldValue: { name: existing.name },
+    });
+
+    return { success: true, message: 'Job type deleted successfully.' };
   }
 }

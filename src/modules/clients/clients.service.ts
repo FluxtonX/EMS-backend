@@ -13,7 +13,9 @@ import {
   InvoiceStatus,
 } from '../../database/database.service';
 import { CreateClientDto } from './dto/create-client.dto';
+import { UpdateClientDto } from './dto/update-client.dto';
 import { CreateContractDto } from './dto/create-contract.dto';
+import { UpdateContractDto } from './dto/update-contract.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoicesDto } from './dto/query-invoices.dto';
 
@@ -73,6 +75,46 @@ export class ClientsService {
     };
   }
 
+  async updateClient(companyId: string, id: string, dto: UpdateClientDto) {
+    const existing = await this.db.findClientById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Client with ID ${id} not found.`);
+    }
+
+    const updated = await this.db.updateClient(companyId, id, {
+      ...(dto.name && { name: dto.name.trim() }),
+      ...(dto.billingEmail && { billingEmail: dto.billingEmail.toLowerCase().trim() }),
+      ...(dto.companyNumber !== undefined && { companyNumber: dto.companyNumber }),
+      ...(dto.vatNumber !== undefined && { vatNumber: dto.vatNumber }),
+      ...(dto.phone !== undefined && { phone: dto.phone }),
+      ...(dto.address !== undefined && { address: dto.address }),
+      ...(dto.paymentTermsDays !== undefined && { paymentTermsDays: dto.paymentTermsDays }),
+      ...(dto.status && { status: dto.status }),
+      ...(dto.notes !== undefined && { notes: dto.notes }),
+    });
+
+    return updated;
+  }
+
+  async deleteClient(companyId: string, id: string) {
+    const existing = await this.db.findClientById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Client with ID ${id} not found.`);
+    }
+
+    const contracts = await this.db.findContracts(companyId, { clientId: id, status: 'active' });
+    if (contracts.length > 0) {
+      throw new BadRequestException('Cannot delete client with active contracts. Terminate contracts first.');
+    }
+
+    const deleted = await this.db.deleteClient(companyId, id);
+    if (!deleted) {
+      throw new NotFoundException(`Could not delete Client '${id}'.`);
+    }
+
+    return { success: true, message: 'Client deleted successfully.' };
+  }
+
   // --- Contracts ---
 
   async createContract(companyId: string, dto: CreateContractDto) {
@@ -114,6 +156,40 @@ export class ClientsService {
         };
       })
     );
+  }
+
+  async updateContract(companyId: string, id: string, dto: UpdateContractDto) {
+    const existing = await this.db.findContractById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Contract with ID ${id} not found.`);
+    }
+
+    const updated = await this.db.updateContract(companyId, id, {
+      ...(dto.title && { title: dto.title.trim() }),
+      ...(dto.contractNumber && { contractNumber: dto.contractNumber.trim() }),
+      ...(dto.startDate && { startDate: dto.startDate }),
+      ...(dto.endDate !== undefined && { endDate: dto.endDate }),
+      ...(dto.billingCycle && { billingCycle: dto.billingCycle }),
+      ...(dto.hourlyBillingRate !== undefined && { hourlyBillingRate: dto.hourlyBillingRate }),
+      ...(dto.status && { status: dto.status }),
+      ...(dto.notes !== undefined && { notes: dto.notes }),
+    });
+
+    return updated;
+  }
+
+  async deleteContract(companyId: string, id: string) {
+    const existing = await this.db.findContractById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Contract with ID ${id} not found.`);
+    }
+
+    const deleted = await this.db.deleteContract(companyId, id);
+    if (!deleted) {
+      throw new NotFoundException(`Could not delete Contract '${id}'.`);
+    }
+
+    return { success: true, message: 'Contract deleted successfully.' };
   }
 
   // --- Invoices ---

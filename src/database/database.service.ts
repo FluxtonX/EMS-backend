@@ -727,18 +727,19 @@ export class DatabaseService implements OnModuleInit {
   }
 
   private mapSite(row: any): SiteEntity {
+    const addr = typeof row.address === 'string' ? JSON.parse(row.address) : (row.address || {});
     return {
       id: row.id,
       companyId: row.company_id,
       name: row.name,
       code: row.code,
-      address: typeof row.address === 'string' ? JSON.parse(row.address) : (row.address || {}),
+      address: addr,
       contactName: row.contact_name || undefined,
       contactPhone: row.contact_phone || undefined,
       contactEmail: row.contact_email || undefined,
-      latitude: row.latitude ? parseFloat(row.latitude) : undefined,
-      longitude: row.longitude ? parseFloat(row.longitude) : undefined,
-      geofenceRadius: row.geofence_radius || 200,
+      latitude: row.latitude ? parseFloat(row.latitude) : (addr.latitude ? parseFloat(addr.latitude) : undefined),
+      longitude: row.longitude ? parseFloat(row.longitude) : (addr.longitude ? parseFloat(addr.longitude) : undefined),
+      geofenceRadius: row.geofence_radius ? Number(row.geofence_radius) : (addr.geofenceRadius ? Number(addr.geofenceRadius) : 200),
       status: row.status,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
@@ -2095,6 +2096,13 @@ export class DatabaseService implements OnModuleInit {
 
     if (this.supabase) {
       try {
+        const enrichedAddress = {
+          ...(data.address || {}),
+          latitude: data.latitude || undefined,
+          longitude: data.longitude || undefined,
+          geofenceRadius: data.geofenceRadius || 200,
+        };
+
         const { data: inserted, error } = await this.supabase
           .from('sites')
           .insert({
@@ -2102,13 +2110,10 @@ export class DatabaseService implements OnModuleInit {
             company_id: data.companyId,
             name: data.name.trim(),
             code,
-            address: data.address,
+            address: enrichedAddress,
             contact_name: data.contactName || null,
             contact_phone: data.contactPhone || null,
             contact_email: data.contactEmail || null,
-            latitude: data.latitude || null,
-            longitude: data.longitude || null,
-            geofence_radius: data.geofenceRadius || 200,
             status: data.status || 'active',
           })
           .select()
@@ -2290,6 +2295,74 @@ export class DatabaseService implements OnModuleInit {
     return job;
   }
 
+  async updateJobType(
+    companyId: string,
+    id: string,
+    updates: Partial<Omit<JobTypeEntity, 'id' | 'companyId' | 'createdAt' | 'updatedAt'>>
+  ): Promise<JobTypeEntity | null> {
+    if (this.supabase) {
+      try {
+        const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+        if (updates.name !== undefined) patch.name = updates.name.trim();
+        if (updates.description !== undefined) patch.description = updates.description?.trim() || null;
+        if (updates.isActive !== undefined) patch.is_active = updates.isActive;
+
+        const { data, error } = await this.supabase
+          .from('job_types')
+          .update(patch)
+          .eq('company_id', companyId)
+          .eq('id', id)
+          .select()
+          .maybeSingle();
+
+        if (!error && data) {
+          const jt = this.mapJobType(data);
+          this.jobTypes.set(jt.id, jt);
+          return jt;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase updateJobType exception: ${err.message}`);
+      }
+    }
+
+    const jt = await this.findJobTypeById(companyId, id);
+    if (!jt) return null;
+
+    const updated: JobTypeEntity = {
+      ...jt,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.jobTypes.set(id, updated);
+    return updated;
+  }
+
+  async deleteJobType(companyId: string, id: string): Promise<boolean> {
+    if (this.supabase) {
+      try {
+        const { error } = await this.supabase
+          .from('job_types')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('id', id);
+
+        if (!error) {
+          this.jobTypes.delete(id);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteJobType exception: ${err.message}`);
+      }
+    }
+
+    const jt = this.jobTypes.get(id);
+    if (jt && jt.companyId === companyId) {
+      this.jobTypes.delete(id);
+      return true;
+    }
+    return false;
+  }
+
   // --- SITE JOBS & RATES (SECTION 21) ---
   async findSiteJobs(
     companyId: string,
@@ -2468,6 +2541,73 @@ export class DatabaseService implements OnModuleInit {
     };
     this.siteJobs.set(id, updated);
     return updated;
+  }
+
+  async findAllSiteJobs(
+    companyId: string
+  ): Promise<Array<SiteJobEntity & { site?: SiteEntity; jobType: JobTypeEntity }>> {
+    const results: Array<SiteJobEntity & { site?: SiteEntity; jobType: JobTypeEntity }> = [];
+
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('site_jobs')
+          .select('*, sites(*), job_types(*)')
+          .eq('company_id', companyId);
+
+        if (!error && data) {
+          for (const row of data) {
+            const sj = this.mapSiteJob(row);
+            const jt = row.job_types ? this.mapJobType(row.job_types) : null;
+            const site = row.sites ? this.mapSite(row.sites) : null;
+            if (jt) {
+              results.push({ ...sj, jobType: jt, site: site || undefined });
+            }
+          }
+          return results;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase findAllSiteJobs exception: ${err.message}`);
+      }
+    }
+
+    for (const sj of this.siteJobs.values()) {
+      if (sj.companyId === companyId) {
+        const jobType = await this.findJobTypeById(companyId, sj.jobTypeId);
+        const site = await this.findSiteById(companyId, sj.siteId);
+        if (jobType) {
+          results.push({ ...sj, jobType, site: site || undefined });
+        }
+      }
+    }
+    return results;
+  }
+
+  async deleteSiteJob(companyId: string, siteId: string, id: string): Promise<boolean> {
+    if (this.supabase) {
+      try {
+        const { error } = await this.supabase
+          .from('site_jobs')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('site_id', siteId)
+          .eq('id', id);
+
+        if (!error) {
+          this.siteJobs.delete(id);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteSiteJob exception: ${err.message}`);
+      }
+    }
+
+    const sj = this.siteJobs.get(id);
+    if (sj && sj.companyId === companyId && sj.siteId === siteId) {
+      this.siteJobs.delete(id);
+      return true;
+    }
+    return false;
   }
 
   // --- ASSIGNMENT OPERATIONS (SECTION 22, 37, 38) ---
@@ -4724,6 +4864,32 @@ export class DatabaseService implements OnModuleInit {
     return updated;
   }
 
+  async deleteClient(companyId: string, id: string): Promise<boolean> {
+    if (this.supabase) {
+      try {
+        const { error } = await this.supabase
+          .from('clients')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('id', id);
+
+        if (!error) {
+          this.clients.delete(id);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteClient exception: ${err.message}`);
+      }
+    }
+
+    const cl = this.clients.get(id);
+    if (cl && cl.companyId === companyId) {
+      this.clients.delete(id);
+      return true;
+    }
+    return false;
+  }
+
   async createContract(data: Omit<ContractEntity, 'id' | 'createdAt' | 'updatedAt'>): Promise<ContractEntity> {
     const id = randomUUID();
     const now = new Date();
@@ -4810,6 +4976,73 @@ export class DatabaseService implements OnModuleInit {
 
     const item = this.contracts.get(id);
     return item && item.companyId === companyId ? item : null;
+  }
+
+  async updateContract(
+    companyId: string,
+    id: string,
+    updates: Partial<ContractEntity>
+  ): Promise<ContractEntity | null> {
+    const existing = await this.findContractById(companyId, id);
+    if (!existing) return null;
+
+    const now = new Date();
+    const updated: ContractEntity = { ...existing, ...updates, updatedAt: now };
+
+    if (this.supabase) {
+      try {
+        const patch: Record<string, any> = { updated_at: now.toISOString() };
+        if (updates.title !== undefined) patch.title = updates.title;
+        if (updates.contractNumber !== undefined) patch.contract_number = updates.contractNumber;
+        if (updates.startDate !== undefined) patch.start_date = updates.startDate;
+        if (updates.endDate !== undefined) patch.end_date = updates.endDate;
+        if (updates.billingCycle !== undefined) patch.billing_cycle = updates.billingCycle;
+        if (updates.hourlyBillingRate !== undefined) patch.hourly_billing_rate = updates.hourlyBillingRate;
+        if (updates.status !== undefined) patch.status = updates.status;
+        if (updates.notes !== undefined) patch.notes = updates.notes;
+
+        const { data: row, error } = await this.supabase
+          .from('contracts')
+          .update(patch)
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .select()
+          .single();
+
+        if (!error && row) return this.mapContract(row);
+      } catch (err: any) {
+        this.logger.error(`Supabase updateContract exception: ${err.message}`);
+      }
+    }
+
+    this.contracts.set(id, updated);
+    return updated;
+  }
+
+  async deleteContract(companyId: string, id: string): Promise<boolean> {
+    if (this.supabase) {
+      try {
+        const { error } = await this.supabase
+          .from('contracts')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('id', id);
+
+        if (!error) {
+          this.contracts.delete(id);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteContract exception: ${err.message}`);
+      }
+    }
+
+    const c = this.contracts.get(id);
+    if (c && c.companyId === companyId) {
+      this.contracts.delete(id);
+      return true;
+    }
+    return false;
   }
 
   async createInvoice(data: Omit<InvoiceEntity, 'id' | 'createdAt' | 'updatedAt'>): Promise<InvoiceEntity> {

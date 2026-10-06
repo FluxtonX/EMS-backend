@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -12,6 +13,7 @@ import {
 import { SitesService } from './sites.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { CreateJobTypeDto } from './dto/create-job-type.dto';
+import { UpdateJobTypeDto } from './dto/update-job-type.dto';
 import { AddSiteJobDto, UpdateSiteJobDto } from './dto/add-site-job.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
@@ -32,6 +34,13 @@ export class SitesController {
   @Roles(Role.Owner, Role.Admin, Role.Manager, Role.Supervisor)
   async getSites(@TenantId() companyId: string) {
     return this.sitesService.getSites(companyId);
+  }
+
+  // --- BULK RATES MATRIX (Must be declared before sites/:id) ---
+  @Get('sites/jobs/matrix')
+  @Roles(Role.Owner, Role.Admin, Role.Manager, Role.Supervisor)
+  async getSiteJobsMatrix(@TenantId() companyId: string) {
+    return this.sitesService.getSiteJobsMatrix(companyId);
   }
 
   @Get('sites/:id')
@@ -72,6 +81,15 @@ export class SitesController {
     return this.sitesService.getJobTypes(companyId);
   }
 
+  @Get('job-types/:id')
+  @Roles(Role.Owner, Role.Admin, Role.Manager, Role.Supervisor)
+  async getJobTypeById(
+    @TenantId() companyId: string,
+    @Param('id') id: string
+  ) {
+    return this.sitesService.getJobTypeById(companyId, id);
+  }
+
   @Post('job-types')
   @Roles(Role.Owner, Role.Admin, Role.Manager)
   @HttpCode(HttpStatus.CREATED)
@@ -81,6 +99,27 @@ export class SitesController {
     @Body() dto: CreateJobTypeDto
   ) {
     return this.sitesService.createJobType(companyId, actor.id, dto);
+  }
+
+  @Patch('job-types/:id')
+  @Roles(Role.Owner, Role.Admin, Role.Manager)
+  async updateJobType(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateJobTypeDto
+  ) {
+    return this.sitesService.updateJobType(companyId, actor.id, id, dto);
+  }
+
+  @Delete('job-types/:id')
+  @Roles(Role.Owner, Role.Admin, Role.Manager)
+  async deleteJobType(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return this.sitesService.deleteJobType(companyId, actor.id, id);
   }
 
   // --- SITE JOBS & RATES MATRIX ---
@@ -116,4 +155,16 @@ export class SitesController {
   ) {
     return this.sitesService.updateSiteJob(companyId, actor.id, siteId, jobId, dto);
   }
+
+  @Delete('sites/:siteId/jobs/:jobId')
+  @Roles(Role.Owner, Role.Admin, Role.Manager)
+  async deleteSiteJob(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('siteId') siteId: string,
+    @Param('jobId') jobId: string
+  ) {
+    return this.sitesService.deleteSiteJob(companyId, actor.id, siteId, jobId);
+  }
 }
+
