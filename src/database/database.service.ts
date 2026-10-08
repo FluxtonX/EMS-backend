@@ -3862,12 +3862,7 @@ export class DatabaseService implements OnModuleInit {
       }
     }
 
-    const companyNotifications = [...this.notifications.values()].filter(
-      (n) => n.companyId === companyId
-    );
-    if (companyNotifications.length === 0) {
-      this.seedSampleNotifications(companyId, userId);
-    }
+    // Return real company notifications from database/memory
 
     let all = [...this.notifications.values()].filter((n) => {
       if (n.companyId !== companyId) return false;
@@ -3907,12 +3902,7 @@ export class DatabaseService implements OnModuleInit {
       }
     }
 
-    const companyNotifications = [...this.notifications.values()].filter(
-      (n) => n.companyId === companyId
-    );
-    if (companyNotifications.length === 0) {
-      this.seedSampleNotifications(companyId, userId);
-    }
+    // Return real company notifications from database/memory
 
     return [...this.notifications.values()].filter(
       (n) => n.companyId === companyId && (!userId || !n.userId || n.userId === userId) && n.status === 'unread'
@@ -5616,6 +5606,9 @@ export class DatabaseService implements OnModuleInit {
   }
 
   async findChatMessages(companyId: string, conversationId: string, limit = 100): Promise<ChatMessageEntity[]> {
+    const memoryMsgs = Array.from(this.chatMessages.values())
+      .filter((m) => m.companyId === companyId && m.conversationId === conversationId);
+
     if (this.supabase) {
       try {
         const { data, error } = await this.supabase
@@ -5627,7 +5620,7 @@ export class DatabaseService implements OnModuleInit {
           .limit(limit);
 
         if (!error && data) {
-          return data.map((r: any) => ({
+          const dbMsgs = data.map((r: any) => ({
             id: r.id,
             conversationId: r.conversation_id,
             companyId: r.company_id,
@@ -5639,14 +5632,21 @@ export class DatabaseService implements OnModuleInit {
             readAt: r.read_at ? new Date(r.read_at) : undefined,
             createdAt: new Date(r.created_at),
           }));
+
+          const map = new Map<string, ChatMessageEntity>();
+          for (const m of dbMsgs) map.set(m.id, m);
+          for (const m of memoryMsgs) map.set(m.id, m);
+
+          return Array.from(map.values())
+            .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+            .slice(-limit);
         }
       } catch (err: any) {
         this.logger.error(`Supabase findChatMessages exception: ${err.message}`);
       }
     }
 
-    return Array.from(this.chatMessages.values())
-      .filter((m) => m.companyId === companyId && m.conversationId === conversationId)
+    return memoryMsgs
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .slice(-limit);
   }

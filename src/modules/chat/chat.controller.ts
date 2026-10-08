@@ -42,6 +42,15 @@ export class ChatController {
     return this.chatService.getOrCreateConversation(companyId, user, dto.employeeId);
   }
 
+  @Get('by-employee/:employeeId')
+  async getOrCreateConversationByParam(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId') employeeId: string
+  ) {
+    return this.chatService.getOrCreateConversation(companyId, user, employeeId);
+  }
+
   @Get('conversations/:id/messages')
   async getMessages(
     @TenantId() companyId: string,

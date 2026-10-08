@@ -1,7 +1,7 @@
-import { IsNotEmpty, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 
 export class CreateConversationDto {
-  @IsUUID('4', { message: 'A valid employee UUID is required' })
-  @IsNotEmpty({ message: 'Employee ID is required' })
+  @IsString({ message: 'Employee or Participant ID must be a string' })
+  @IsNotEmpty({ message: 'Employee or Participant ID is required' })
   employeeId: string;
 }

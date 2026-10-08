@@ -83,11 +83,8 @@ export class TimesheetsService {
         continue;
       }
 
-      // If no attendance records found, seed realistic baseline shifts for the period
-      let recordsToProcess = eligibleRecords;
-      if (recordsToProcess.length === 0) {
-        recordsToProcess = this.seedSyntheticAttendanceForTimesheet(companyId, emp.id, dto.periodStart, dto.periodEnd);
-      }
+      // Process real attendance records from database
+      const recordsToProcess = eligibleRecords;
 
       let cumulativeHours = 0;
       let totalBreakMinutes = 0;
