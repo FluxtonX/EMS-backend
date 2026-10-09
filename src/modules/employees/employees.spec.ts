@@ -348,5 +348,22 @@ describe('Employees Module & Onboarding Tests (Phase 3)', () => {
         service.resendInvite(companyA, actorId, onboardResult.employee.id)
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('should delete employee, clean up records, and log audit event', async () => {
+      const emp = await service.create(companyA, actorId, {
+        ...validEmployeeDto,
+        employeeNumber: 'EMP-DELETE-1',
+        email: 'to.delete@workforce.co.uk',
+      });
+
+      const removeResult = await service.remove(companyA, actorId, emp.id);
+      expect(removeResult.message).toContain('removed successfully');
+
+      await expect(service.findById(companyA, emp.id)).rejects.toThrow(NotFoundException);
+
+      const logs = await db.getAuditLogs(companyA);
+      expect(logs.some((l) => l.action === 'EMPLOYEE_DELETED' && l.entityId === emp.id)).toBe(true);
+    });
   });
 });
+

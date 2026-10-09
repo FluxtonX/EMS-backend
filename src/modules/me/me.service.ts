@@ -7,6 +7,8 @@ import {
 import { DatabaseService, EmployeeEntity } from '../../database/database.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { LeaveService } from '../leave/leave.service';
+import { LicencesService } from '../licences/licences.service';
+import { CreateLicenceDto } from '../licences/dto/create-licence.dto';
 import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
 import { MyClockInDto, MyClockOutDto } from './dto/my-attendance.dto';
 import { MyLeaveRequestDto } from './dto/my-leave-request.dto';
@@ -19,7 +21,8 @@ export class MeService {
   constructor(
     private readonly db: DatabaseService,
     private readonly attendanceService: AttendanceService,
-    private readonly leaveService: LeaveService
+    private readonly leaveService: LeaveService,
+    private readonly licencesService: LicencesService
   ) {}
 
   /**
@@ -192,6 +195,7 @@ export class MeService {
     const employee = await this.getEmployeeForUser(companyId, user);
 
     const updates: any = {};
+    if (dto.avatarUrl !== undefined) updates.avatarUrl = dto.avatarUrl;
     if (dto.phone) updates.phone = dto.phone.trim();
     if (dto.address) {
       updates.address = {
@@ -404,6 +408,11 @@ export class MeService {
   async getLicences(companyId: string, user: AuthenticatedUser) {
     const employee = await this.getEmployeeForUser(companyId, user);
     return this.db.findLicencesByEmployeeId(companyId, employee.id);
+  }
+
+  async createLicence(companyId: string, user: AuthenticatedUser, dto: CreateLicenceDto) {
+    const employee = await this.getEmployeeForUser(companyId, user);
+    return this.licencesService.createEmployeeSubmissionLicence(companyId, employee.id, dto);
   }
 
   /**

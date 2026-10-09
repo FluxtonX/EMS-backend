@@ -4,6 +4,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Role } from '../common/enums/role.enum';
 import { randomUUID } from 'crypto';
 import WebSocket from 'ws';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface CompanyEntity {
   id: string;
@@ -99,6 +101,7 @@ export interface LicenceEntity {
   licenceType: string;
   licenceNumber: string;
   expiryDate: string;
+  documentUrl?: string;
   status: LicenceStatus;
   verifiedAt?: Date;
   verifiedBy?: string;
@@ -554,6 +557,7 @@ export class DatabaseService implements OnModuleInit {
   private invoiceItems: Map<string, InvoiceItemEntity> = new Map();
   private chatConversations: Map<string, ChatConversationEntity> = new Map();
   private chatMessages: Map<string, ChatMessageEntity> = new Map();
+  private licenceDocuments: Map<string, string> = new Map();
 
   constructor(@Optional() private configService?: ConfigService) {}
 
@@ -580,6 +584,89 @@ export class DatabaseService implements OnModuleInit {
       }
     } else {
       this.logger.log('Running in decoupled memory storage mode with placeholder credentials or test environment.');
+    }
+
+    this.initLicenceDocuments();
+  }
+
+  private async initLicenceDocuments() {
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const dataFile = path.join(dataDir, 'licence_documents.json');
+      if (fs.existsSync(dataFile)) {
+        const raw = fs.readFileSync(dataFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string') {
+            this.licenceDocuments.set(k, v);
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Could not read licence_documents.json: ${err.message}`);
+    }
+
+    // Recover photos from audit logs
+    if (this.supabase) {
+      try {
+        const { data: auditRows } = await this.supabase
+          .from('audit_logs')
+          .select('entity_id, new_value')
+          .in('action', ['EMPLOYEE_LICENCE_SUBMITTED', 'LICENCE_CREATED'])
+          .order('created_at', { ascending: true });
+
+        if (auditRows && auditRows.length > 0) {
+          for (const row of auditRows) {
+            const docUrl = row.new_value?.documentUrl;
+            const licNum = row.new_value?.licenceNumber;
+            const empId = row.new_value?.employeeId;
+            const entityId = row.entity_id;
+            if (docUrl) {
+              if (entityId) this.licenceDocuments.set(entityId, docUrl);
+              if (licNum) this.licenceDocuments.set(licNum, docUrl);
+              if (empId) this.licenceDocuments.set(`emp_${empId}`, docUrl);
+            }
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Could not load licence documents from audit_logs: ${err.message}`);
+      }
+    }
+  }
+
+  public getLicenceDocumentUrl(id: string, licenceNumber?: string, employeeId?: string): string | undefined {
+    return (
+      this.licenceDocuments.get(id) ||
+      (licenceNumber ? this.licenceDocuments.get(licenceNumber) : undefined) ||
+      (employeeId ? this.licenceDocuments.get(`emp_${employeeId}`) : undefined)
+    );
+  }
+
+  public setLicenceDocumentUrl(id: string, licenceNumber: string | undefined, url: string, employeeId?: string) {
+    if (!url) return;
+    this.licenceDocuments.set(id, url);
+    if (licenceNumber) {
+      this.licenceDocuments.set(licenceNumber, url);
+    }
+    if (employeeId) {
+      this.licenceDocuments.set(`emp_${employeeId}`, url);
+    }
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const dataFile = path.join(dataDir, 'licence_documents.json');
+      const obj: Record<string, string> = {};
+      for (const [k, v] of this.licenceDocuments.entries()) {
+        obj[k] = v;
+      }
+      fs.writeFileSync(dataFile, JSON.stringify(obj, null, 2), 'utf-8');
+    } catch (err: any) {
+      this.logger.warn(`Could not persist licence_documents.json: ${err.message}`);
     }
   }
 
@@ -700,6 +787,7 @@ export class DatabaseService implements OnModuleInit {
       licenceType: row.licence_type,
       licenceNumber: row.licence_number,
       expiryDate: row.expiry_date,
+      documentUrl: row.document_url || row.documentUrl || row.licence_image || row.licenceImage || undefined,
       status: row.status,
       verifiedAt: row.verified_at ? new Date(row.verified_at) : undefined,
       verifiedBy: row.verified_by || undefined,
@@ -941,7 +1029,48 @@ export class DatabaseService implements OnModuleInit {
     return user;
   }
 
+  async updateUser(id: string, updates: Partial<UserEntity>): Promise<UserEntity | null> {
+    if (this.supabase) {
+      try {
+        const dbUpdates: any = { updated_at: new Date().toISOString() };
+        if (updates.email) dbUpdates.email = updates.email.toLowerCase().trim();
+        if (updates.passwordHash) dbUpdates.password_hash = updates.passwordHash;
+        if (updates.firstName) dbUpdates.first_name = updates.firstName.trim();
+        if (updates.lastName) dbUpdates.last_name = updates.lastName.trim();
+        if (updates.phone) dbUpdates.phone = updates.phone.trim();
+        if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+
+        const { data, error } = await this.supabase
+          .from('users')
+          .update(dbUpdates)
+          .eq('id', id)
+          .select()
+          .maybeSingle();
+
+        if (!error && data) {
+          const user = this.mapUser(data);
+          this.users.set(user.id, user);
+          return user;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase updateUser exception: ${err.message}`);
+      }
+    }
+
+    const user = this.users.get(id);
+    if (!user) return null;
+
+    const updated: UserEntity = {
+      ...user,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.users.set(id, updated);
+    return updated;
+  }
+
   // --- COMPANY OPERATIONS ---
+
   async findCompanyById(id: string): Promise<CompanyEntity | null> {
     if (this.supabase) {
       try {
@@ -1545,6 +1674,37 @@ export class DatabaseService implements OnModuleInit {
     return updated;
   }
 
+  async deleteEmployee(companyId: string, id: string): Promise<boolean> {
+    if (this.supabase) {
+      try {
+        const tables = ['licences', 'assignments', 'documents', 'shifts', 'attendance', 'leave_requests', 'timesheets'];
+        for (const table of tables) {
+          await this.supabase.from(table).delete().eq('company_id', companyId).eq('employee_id', id);
+        }
+        const { error } = await this.supabase
+          .from('employees')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('id', id);
+
+        if (!error) {
+          this.employees.delete(id);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`Supabase deleteEmployee exception: ${err.message}`);
+      }
+    }
+
+    const emp = this.employees.get(id);
+    if (emp && emp.companyId === companyId) {
+      this.employees.delete(id);
+      return true;
+    }
+    return false;
+  }
+
+
   // --- LICENCE OPERATIONS (SECTION 42) ---
   async createLicence(
     data: Omit<LicenceEntity, 'id' | 'createdAt' | 'updatedAt'>
@@ -1554,24 +1714,56 @@ export class DatabaseService implements OnModuleInit {
 
     if (this.supabase) {
       try {
-        const { data: inserted, error } = await this.supabase
-          .from('employee_licences')
-          .insert({
-            id,
-            company_id: data.companyId,
-            employee_id: data.employeeId,
-            licence_type: data.licenceType,
-            licence_number: data.licenceNumber,
-            expiry_date: data.expiryDate,
-            status: data.status,
-            verified_at: data.verifiedAt?.toISOString() || null,
-            verified_by: data.verifiedBy || null,
-          })
-          .select()
-          .single();
+        let inserted: any = null;
+        let insertError: any = null;
 
-        if (!error && inserted) {
+        if (data.documentUrl) {
+          const res = await this.supabase
+            .from('employee_licences')
+            .insert({
+              id,
+              company_id: data.companyId,
+              employee_id: data.employeeId,
+              licence_type: data.licenceType,
+              licence_number: data.licenceNumber,
+              expiry_date: data.expiryDate,
+              document_url: data.documentUrl,
+              status: data.status,
+              verified_at: data.verifiedAt?.toISOString() || null,
+              verified_by: data.verifiedBy || null,
+            })
+            .select()
+            .single();
+          inserted = res.data;
+          insertError = res.error;
+        }
+
+        if (!inserted || insertError) {
+          const fallbackRes = await this.supabase
+            .from('employee_licences')
+            .insert({
+              id,
+              company_id: data.companyId,
+              employee_id: data.employeeId,
+              licence_type: data.licenceType,
+              licence_number: data.licenceNumber,
+              expiry_date: data.expiryDate,
+              status: data.status,
+              verified_at: data.verifiedAt?.toISOString() || null,
+              verified_by: data.verifiedBy || null,
+            })
+            .select()
+            .single();
+          inserted = fallbackRes.data;
+          insertError = fallbackRes.error;
+        }
+
+        if (!insertError && inserted) {
           const lic = this.mapLicence(inserted);
+          if (data.documentUrl) {
+            lic.documentUrl = data.documentUrl;
+            this.setLicenceDocumentUrl(lic.id, lic.licenceNumber, data.documentUrl, lic.employeeId);
+          }
           this.licences.set(lic.id, lic);
           return lic;
         }
@@ -1586,6 +1778,9 @@ export class DatabaseService implements OnModuleInit {
       createdAt: now,
       updatedAt: now,
     };
+    if (data.documentUrl) {
+      this.setLicenceDocumentUrl(id, data.licenceNumber, data.documentUrl, data.employeeId);
+    }
     this.licences.set(id, licence);
     return licence;
   }
@@ -1600,7 +1795,14 @@ export class DatabaseService implements OnModuleInit {
           .eq('employee_id', employeeId);
 
         if (!error && data) {
-          return data.map((r) => this.mapLicence(r));
+          return data.map((r) => {
+            const lic = this.mapLicence(r);
+            const docUrl = this.getLicenceDocumentUrl(lic.id, lic.licenceNumber, lic.employeeId);
+            if (docUrl && !lic.documentUrl) {
+              lic.documentUrl = docUrl;
+            }
+            return lic;
+          });
         }
       } catch (err: any) {
         this.logger.error(`Supabase findLicencesByEmployeeId exception: ${err.message}`);
@@ -1610,6 +1812,10 @@ export class DatabaseService implements OnModuleInit {
     const results: LicenceEntity[] = [];
     for (const lic of this.licences.values()) {
       if (lic.companyId === companyId && lic.employeeId === employeeId) {
+        const docUrl = this.getLicenceDocumentUrl(lic.id, lic.licenceNumber, lic.employeeId);
+        if (docUrl && !lic.documentUrl) {
+          lic.documentUrl = docUrl;
+        }
         results.push(lic);
       }
     }
@@ -1655,6 +1861,10 @@ export class DatabaseService implements OnModuleInit {
           const totalPages = Math.ceil(total / limit) || 1;
           const items = data.map((r) => {
             const lic = this.mapLicence(r);
+            const docUrl = this.getLicenceDocumentUrl(lic.id, lic.licenceNumber, lic.employeeId);
+            if (docUrl && !lic.documentUrl) {
+              lic.documentUrl = docUrl;
+            }
             const emp = r.employees ? this.mapEmployee(r.employees) : undefined;
             return { ...lic, employee: emp };
           });
@@ -1709,7 +1919,12 @@ export class DatabaseService implements OnModuleInit {
           .maybeSingle();
 
         if (!error && data) {
-          return this.mapLicence(data);
+          const lic = this.mapLicence(data);
+          const docUrl = this.getLicenceDocumentUrl(lic.id, lic.licenceNumber, lic.employeeId);
+          if (docUrl && !lic.documentUrl) {
+            lic.documentUrl = docUrl;
+          }
+          return lic;
         }
       } catch (err: any) {
         this.logger.error(`Supabase findLicenceById exception: ${err.message}`);
@@ -2694,10 +2909,12 @@ export class DatabaseService implements OnModuleInit {
         if (!error && data) {
           for (const row of data) {
             const assignment = this.mapAssignment(row);
-            if (row.site_jobs && row.site_jobs.sites && row.site_jobs.job_types) {
+            if (row.site_jobs && row.site_jobs.sites) {
               const sj = this.mapSiteJob(row.site_jobs);
               const site = this.mapSite(row.site_jobs.sites);
-              const jt = this.mapJobType(row.site_jobs.job_types);
+              const jt: JobTypeEntity = row.site_jobs.job_types
+                ? this.mapJobType(row.site_jobs.job_types)
+                : { id: sj.jobTypeId, companyId, name: 'Security Officer', isActive: true, createdAt: new Date(), updatedAt: new Date() };
               results.push({
                 ...assignment,
                 siteJob: { ...sj, site, jobType: jt },
@@ -2716,11 +2933,12 @@ export class DatabaseService implements OnModuleInit {
         const siteJob = await this.findSiteJobById(companyId, a.siteJobId);
         if (siteJob) {
           const site = await this.findSiteById(companyId, siteJob.siteId);
-          const jobType = await this.findJobTypeById(companyId, siteJob.jobTypeId);
-          if (site && jobType) {
+          const jobType = siteJob.jobTypeId ? await this.findJobTypeById(companyId, siteJob.jobTypeId) : null;
+          if (site) {
+            const jt: JobTypeEntity = jobType || { id: siteJob.jobTypeId, companyId, name: 'Security Officer', isActive: true, createdAt: new Date(), updatedAt: new Date() };
             results.push({
               ...a,
-              siteJob: { ...siteJob, site, jobType },
+              siteJob: { ...siteJob, site, jobType: jt },
             });
           }
         }
@@ -2757,10 +2975,12 @@ export class DatabaseService implements OnModuleInit {
           for (const row of data) {
             const assignment = this.mapAssignment(row);
             const employee = row.employees ? this.mapEmployee(row.employees) : undefined;
-            if (row.site_jobs && row.site_jobs.sites && row.site_jobs.job_types) {
+            if (row.site_jobs && row.site_jobs.sites) {
               const sj = this.mapSiteJob(row.site_jobs);
               const site = this.mapSite(row.site_jobs.sites);
-              const jt = this.mapJobType(row.site_jobs.job_types);
+              const jt: JobTypeEntity = row.site_jobs.job_types
+                ? this.mapJobType(row.site_jobs.job_types)
+                : { id: sj.jobTypeId, companyId, name: 'Security Officer', isActive: true, createdAt: new Date(), updatedAt: new Date() };
               if (!options?.siteId || options.siteId === site.id) {
                 results.push({
                   ...assignment,
@@ -3446,6 +3666,9 @@ export class DatabaseService implements OnModuleInit {
       updatedAt: now,
     };
 
+    // Always keep memory map synchronized
+    this.leaveRequests.set(id, entity);
+
     if (this.supabase) {
       try {
         const { data: row, error } = await this.supabase
@@ -3465,14 +3688,17 @@ export class DatabaseService implements OnModuleInit {
           })
           .select()
           .single();
-        if (!error && row) return this.mapLeaveRequest(row);
+        if (!error && row) {
+          const mapped = this.mapLeaveRequest(row);
+          this.leaveRequests.set(id, mapped);
+          return mapped;
+        }
         this.logger.warn(`Supabase createLeaveRequest warn: ${error?.message}`);
       } catch (err: any) {
         this.logger.error(`Supabase createLeaveRequest exception: ${err.message}`);
       }
     }
 
-    this.leaveRequests.set(id, entity);
     return entity;
   }
 
@@ -3512,9 +3738,29 @@ export class DatabaseService implements OnModuleInit {
         if (!error && data) {
           for (const row of data) {
             const leave = this.mapLeaveRequest(row);
-            if (row.employees) {
-              results.push({ ...leave, employee: this.mapEmployee(row.employees) });
+            let emp = row.employees ? this.mapEmployee(row.employees) : null;
+            if (!emp) {
+              emp = await this.findEmployeeById(companyId, row.employee_id);
             }
+            if (!emp) {
+              emp = {
+                id: row.employee_id,
+                companyId,
+                employeeNumber: 'EMP',
+                firstName: 'Employee',
+                lastName: row.employee_id.substring(0, 6),
+                email: '',
+                phone: '',
+                dateOfBirth: '',
+                address: { line1: '', city: '', postalCode: '', country: '' },
+                emergencyContact: { name: '', relationship: '', phone: '' },
+                employmentStatus: 'active',
+                employmentStartDate: new Date().toISOString(),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+            }
+            results.push({ ...leave, employee: emp });
           }
           return results;
         }
@@ -3530,8 +3776,26 @@ export class DatabaseService implements OnModuleInit {
       if (filters.status && filters.status !== 'all' && leave.status !== filters.status) continue;
       if (filters.startDate && leave.endDate < filters.startDate) continue;
       if (filters.endDate && leave.startDate > filters.endDate) continue;
-      const employee = await this.findEmployeeById(companyId, leave.employeeId);
-      if (employee) results.push({ ...leave, employee });
+      let employee = await this.findEmployeeById(companyId, leave.employeeId);
+      if (!employee) {
+        employee = {
+          id: leave.employeeId,
+          companyId,
+          employeeNumber: 'EMP',
+          firstName: 'Employee',
+          lastName: leave.employeeId.substring(0, 6),
+          email: '',
+          phone: '',
+          dateOfBirth: '',
+          address: { line1: '', city: '', postalCode: '', country: '' },
+          emergencyContact: { name: '', relationship: '', phone: '' },
+          employmentStatus: 'active',
+          employmentStartDate: new Date().toISOString(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      }
+      results.push({ ...leave, employee });
     }
     return results.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }

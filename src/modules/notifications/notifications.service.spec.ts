@@ -52,9 +52,16 @@ describe('NotificationsService', () => {
   });
 
   it('should get unread notifications count', async () => {
+    await service.create(mockCompanyId, {
+      userId: mockUserId,
+      title: 'Unread Alert',
+      message: 'Unread test message',
+      type: 'system',
+    });
     const count = await service.getUnreadCount(mockCompanyId, mockUserId);
     expect(count).toBeGreaterThanOrEqual(1);
   });
+
 
   it('should mark a notification as read', async () => {
     const n = await service.create(mockCompanyId, {

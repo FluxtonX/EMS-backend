@@ -19,6 +19,7 @@ import { TenantGuard } from '../../common/guards/tenant.guard';
 import { TenantId } from '../../common/decorators/tenant.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { CreateLicenceDto } from '../licences/dto/create-licence.dto';
 
 @Controller('me')
 @UseGuards(JwtAuthGuard, TenantGuard)
@@ -129,6 +130,16 @@ export class MeController {
     @CurrentUser() user: AuthenticatedUser
   ) {
     return this.meService.getLicences(companyId, user);
+  }
+
+  @Post('licences')
+  @HttpCode(HttpStatus.CREATED)
+  async createLicence(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateLicenceDto
+  ) {
+    return this.meService.createLicence(companyId, user, dto);
   }
 
   @Get('leave')

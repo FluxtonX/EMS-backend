@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   Query,
@@ -90,4 +91,15 @@ export class EmployeesController {
   ) {
     return this.employeesService.update(companyId, actor.id, id, dto);
   }
+
+  @Delete(':id')
+  @Roles(Role.Owner, Role.Admin)
+  async remove(
+    @TenantId() companyId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return this.employeesService.remove(companyId, actor.id, id);
+  }
 }
+

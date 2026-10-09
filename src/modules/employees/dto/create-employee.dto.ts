@@ -5,6 +5,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -52,6 +53,7 @@ export class InitialLicenceDto {
 
   @IsString()
   @IsNotEmpty({ message: 'Licence number is required' })
+  @Matches(/^\d{16}$/, { message: 'SIA licenceNumber must be exactly 16 digits' })
   licenceNumber: string;
 
   @IsString()
@@ -111,8 +113,13 @@ export class CreateEmployeeDto {
   @IsNotEmpty({ message: 'Employment start date is required' })
   employmentStartDate: string;
 
+  @IsString()
+  @IsOptional()
+  password?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => InitialLicenceDto)
   initialLicence?: InitialLicenceDto;
 }
+

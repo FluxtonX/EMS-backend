@@ -88,7 +88,12 @@ export class OnboardEmployeeDto {
   @Type(() => InitialLicenceDto)
   initialLicence?: InitialLicenceDto;
 
+  @IsString()
+  @IsOptional()
+  password?: string;
+
   @IsBoolean()
   @IsOptional()
   sendInvitation?: boolean = true;
 }
+

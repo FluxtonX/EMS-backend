@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { SendMessageDto } from './dto/send-message.dto';
@@ -68,8 +69,13 @@ export class ChatController {
     @Param('id') conversationId: string,
     @Body() dto: SendMessageDto
   ) {
-    return this.chatService.sendMessage(companyId, user, conversationId, dto.content);
+    const text = (dto.content || dto.text || '').trim();
+    if (!text) {
+      throw new BadRequestException('Message content cannot be empty');
+    }
+    return this.chatService.sendMessage(companyId, user, conversationId, text);
   }
+
 
   @Patch('conversations/:id/read')
   @HttpCode(HttpStatus.OK)

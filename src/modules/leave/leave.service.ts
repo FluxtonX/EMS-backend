@@ -26,17 +26,22 @@ export class LeaveService {
   ) {}
 
   private calculateWorkingDays(startDate: string, endDate: string): number {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const sParts = startDate.split('-').map(Number);
+    const eParts = endDate.split('-').map(Number);
+    if (sParts.length < 3 || eParts.length < 3) return 1;
+    const start = new Date(Date.UTC(sParts[0], sParts[1] - 1, sParts[2]));
+    const end = new Date(Date.UTC(eParts[0], eParts[1] - 1, eParts[2]));
     if (end < start) return 0;
     let count = 0;
+    let totalCalendarDays = 0;
     const current = new Date(start);
     while (current <= end) {
-      const dow = current.getDay();
+      totalCalendarDays++;
+      const dow = current.getUTCDay();
       if (dow !== 0 && dow !== 6) count++;
-      current.setDate(current.getDate() + 1);
+      current.setUTCDate(current.getUTCDate() + 1);
     }
-    return count;
+    return count > 0 ? count : Math.max(1, totalCalendarDays);
   }
 
   async createLeaveRequest(

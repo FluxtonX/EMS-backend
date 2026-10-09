@@ -48,6 +48,7 @@ export class LicencesService {
       licenceType: dto.licenceType.trim(),
       licenceNumber: dto.licenceNumber.trim(),
       expiryDate: dto.expiryDate,
+      documentUrl: dto.documentUrl,
       status: calculatedStatus,
       verifiedAt: new Date(),
       verifiedBy: actorId,
@@ -64,6 +65,45 @@ export class LicencesService {
         licenceType: licence.licenceType,
         licenceNumber: licence.licenceNumber,
         expiryDate: licence.expiryDate,
+        status: licence.status,
+      },
+    });
+
+    return licence;
+  }
+
+  async createEmployeeSubmissionLicence(
+    companyId: string,
+    employeeId: string,
+    dto: CreateLicenceDto
+  ): Promise<LicenceEntity> {
+    const employee = await this.db.findEmployeeById(companyId, employeeId);
+    if (!employee) {
+      throw new NotFoundException(`Employee '${employeeId}' not found.`);
+    }
+
+    const licence = await this.db.createLicence({
+      companyId,
+      employeeId,
+      licenceType: dto.licenceType.trim(),
+      licenceNumber: dto.licenceNumber.trim(),
+      expiryDate: dto.expiryDate,
+      documentUrl: dto.documentUrl,
+      status: 'pending_verification',
+    });
+
+    await this.db.recordAudit({
+      companyId,
+      userId: employee.userId || employeeId,
+      action: 'EMPLOYEE_LICENCE_SUBMITTED',
+      entity: 'employee_licences',
+      entityId: licence.id,
+      newValue: {
+        employeeId,
+        licenceType: licence.licenceType,
+        licenceNumber: licence.licenceNumber,
+        expiryDate: licence.expiryDate,
+        documentUrl: licence.documentUrl,
         status: licence.status,
       },
     });

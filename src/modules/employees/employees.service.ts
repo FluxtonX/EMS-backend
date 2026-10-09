@@ -6,13 +6,17 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { DatabaseService, EmploymentStatus, LicenceStatus, LicenceEntity } from '../../database/database.service';
+import * as bcrypt from 'bcrypt';
+import { DatabaseService, EmploymentStatus, AccountStatus, LicenceStatus, LicenceEntity } from '../../database/database.service';
+
 import { BrevoService } from '../notifications/brevo.service';
 import { AssignmentsService } from '../assignments/assignments.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { QueryEmployeesDto } from './dto/query-employees.dto';
 import { OnboardEmployeeDto } from './dto/onboard-employee.dto';
+import { Role } from '../../common/enums/role.enum';
+
 
 @Injectable()
 export class EmployeesService {
@@ -229,12 +233,46 @@ export class EmployeesService {
       );
     }
 
-    const shouldSendInvite = dto.sendInvitation !== false;
-    const accountStatus = shouldSendInvite ? 'invited' : 'active';
+    const shouldSendInvite = dto.sendInvitation !== false && !dto.password;
+    let linkedUserId: string | undefined = undefined;
+    let finalAccountStatus: AccountStatus = shouldSendInvite ? 'invited' : 'active';
+
+
+
+    if (dto.password && dto.password.trim()) {
+      const passwordHash = await bcrypt.hash(dto.password.trim(), 10);
+      let user = await this.db.findUserByEmail(email);
+      if (!user) {
+        user = await this.db.createUser({
+          email,
+          passwordHash,
+          firstName: dto.firstName.trim(),
+          lastName: dto.lastName.trim(),
+          phone: dto.phone.trim(),
+          isActive: true,
+        });
+      } else {
+        await this.db.updateUser(user.id, { passwordHash });
+      }
+
+      linkedUserId = user.id;
+      finalAccountStatus = 'active';
+
+      let membership = await this.db.findCompanyMember(companyId, user.id);
+      if (!membership) {
+        await this.db.createCompanyMember({
+          companyId,
+          userId: user.id,
+          role: Role.Employee,
+          status: 'active',
+        });
+      }
+    }
 
     // 2. Create permanent employee entity
     const employee = await this.db.createEmployee({
       companyId,
+      userId: linkedUserId,
       employeeNumber,
       firstName: dto.firstName.trim(),
       lastName: dto.lastName.trim(),
@@ -244,9 +282,10 @@ export class EmployeesService {
       address: dto.address,
       emergencyContact: dto.emergencyContact,
       employmentStatus: (dto.employmentStatus as EmploymentStatus) || 'active',
-      accountStatus,
+      accountStatus: finalAccountStatus,
       employmentStartDate: dto.employmentStartDate,
     });
+
 
     // 3. Optional initial licence creation
     let createdLicence: LicenceEntity | null = null;
@@ -464,4 +503,32 @@ export class EmployeesService {
 
     return updated;
   }
+
+  async remove(companyId: string, actorId: string, id: string) {
+    const existing = await this.db.findEmployeeById(companyId, id);
+    if (!existing) {
+      throw new NotFoundException(`Employee record '${id}' not found.`);
+    }
+
+    const deleted = await this.db.deleteEmployee(companyId, id);
+    if (!deleted) {
+      throw new BadRequestException(`Failed to delete employee record '${id}'.`);
+    }
+
+    await this.db.recordAudit({
+      companyId,
+      userId: actorId,
+      action: 'EMPLOYEE_DELETED',
+      entity: 'employees',
+      entityId: id,
+      oldValue: {
+        employeeNumber: existing.employeeNumber,
+        name: `${existing.firstName} ${existing.lastName}`,
+        email: existing.email,
+      },
+    });
+
+    return { message: `Employee ${existing.firstName} ${existing.lastName} (${existing.employeeNumber}) removed successfully.` };
+  }
 }
+

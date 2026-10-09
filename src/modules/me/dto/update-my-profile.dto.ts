@@ -40,6 +40,10 @@ export class UpdateMyEmergencyContactDto {
 export class UpdateMyProfileDto {
   @IsString()
   @IsOptional()
+  avatarUrl?: string;
+
+  @IsString()
+  @IsOptional()
   phone?: string;
 
   @ValidateNested()
