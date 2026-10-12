@@ -17,9 +17,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
+    const rawStatus = (exception as any)?.status || (exception as any)?.statusCode;
     const status =
       exception instanceof HttpException
         ? exception.getStatus()
+        : rawStatus && typeof rawStatus === 'number' && rawStatus >= 400 && rawStatus < 600
+        ? rawStatus
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
     const exceptionResponse =
@@ -43,7 +46,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
         }
       }
     } else if (exception instanceof Error) {
-      this.logger.error(`Unhandled Exception: ${exception.message}`, exception.stack);
+      if ((exception as any).status === 413 || (exception as any).type === 'entity.too.large') {
+        message = 'The uploaded payload or image is too large. Please select a photo under 15MB.';
+        code = 'PAYLOAD_TOO_LARGE';
+        this.logger.warn(`Request entity too large from ${request.ip}: ${request.url}`);
+      } else {
+        this.logger.error(`Unhandled Exception: ${exception.message}`, exception.stack);
+      }
     }
 
     const requestId = (request.headers['x-request-id'] as string) || 'req_' + Date.now();

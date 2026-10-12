@@ -78,6 +78,7 @@ export class ChatController {
 
 
   @Patch('conversations/:id/read')
+  @Post('conversations/:id/read')
   @HttpCode(HttpStatus.OK)
   async markAsRead(
     @TenantId() companyId: string,
@@ -85,6 +86,16 @@ export class ChatController {
     @Param('id') conversationId: string
   ) {
     return this.chatService.markAsRead(companyId, user, conversationId);
+  }
+
+  @Patch('mark-all-read')
+  @Post('mark-all-read')
+  @HttpCode(HttpStatus.OK)
+  async markAllAsRead(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.chatService.markAllAsRead(companyId, user);
   }
 
   @Get('unread-count')

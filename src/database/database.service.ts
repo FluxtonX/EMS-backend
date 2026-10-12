@@ -88,6 +88,7 @@ export interface EmployeeEntity {
   accountStatus?: AccountStatus;
   employmentStartDate: string;
   employmentEndDate?: string;
+  avatarUrl?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -558,6 +559,7 @@ export class DatabaseService implements OnModuleInit {
   private chatConversations: Map<string, ChatConversationEntity> = new Map();
   private chatMessages: Map<string, ChatMessageEntity> = new Map();
   private licenceDocuments: Map<string, string> = new Map();
+  private avatarPhotos: Map<string, string> = new Map();
 
   constructor(@Optional() private configService?: ConfigService) {}
 
@@ -587,6 +589,7 @@ export class DatabaseService implements OnModuleInit {
     }
 
     this.initLicenceDocuments();
+    this.initAvatarPhotos();
   }
 
   private async initLicenceDocuments() {
@@ -670,6 +673,54 @@ export class DatabaseService implements OnModuleInit {
     }
   }
 
+  private async initAvatarPhotos() {
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const dataFile = path.join(dataDir, 'employee_avatars.json');
+      if (fs.existsSync(dataFile)) {
+        const raw = fs.readFileSync(dataFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string') {
+            this.avatarPhotos.set(k, v);
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Could not read employee_avatars.json: ${err.message}`);
+    }
+  }
+
+  public getAvatarPhoto(employeeId: string): string | undefined {
+    return this.avatarPhotos.get(employeeId);
+  }
+
+  public setAvatarPhoto(employeeId: string, url: string | undefined) {
+    if (!employeeId) return;
+    if (url) {
+      this.avatarPhotos.set(employeeId, url);
+    } else {
+      this.avatarPhotos.delete(employeeId);
+    }
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const dataFile = path.join(dataDir, 'employee_avatars.json');
+      const obj: Record<string, string> = {};
+      for (const [k, v] of this.avatarPhotos.entries()) {
+        obj[k] = v;
+      }
+      fs.writeFileSync(dataFile, JSON.stringify(obj, null, 2), 'utf-8');
+    } catch (err: any) {
+      this.logger.warn(`Could not persist employee_avatars.json: ${err.message}`);
+    }
+  }
+
   // --- ENTITY MAPPERS (Database snake_case <-> Application camelCase) ---
   private mapUser(row: any): UserEntity {
     return {
@@ -743,6 +794,7 @@ export class DatabaseService implements OnModuleInit {
       accountStatus: row.account_status || 'invited',
       employmentStartDate: row.employment_start_date,
       employmentEndDate: row.employment_end_date || undefined,
+      avatarUrl: row.avatar_url || row.avatarUrl || (row.id ? this.avatarPhotos.get(row.id) : undefined) || undefined,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };
@@ -1631,6 +1683,10 @@ export class DatabaseService implements OnModuleInit {
     id: string,
     updates: Partial<Omit<EmployeeEntity, 'id' | 'companyId' | 'createdAt' | 'updatedAt'>>
   ): Promise<EmployeeEntity | null> {
+    if (updates.avatarUrl !== undefined) {
+      this.setAvatarPhoto(id, updates.avatarUrl);
+    }
+
     if (this.supabase) {
       try {
         const dbUpdates: any = { updated_at: new Date().toISOString() };
@@ -1668,6 +1724,7 @@ export class DatabaseService implements OnModuleInit {
     const updated: EmployeeEntity = {
       ...emp,
       ...updates,
+      avatarUrl: updates.avatarUrl !== undefined ? updates.avatarUrl : (emp.avatarUrl || this.avatarPhotos.get(id)),
       updatedAt: new Date(),
     };
     this.employees.set(id, updated);
@@ -3803,7 +3860,7 @@ export class DatabaseService implements OnModuleInit {
   async updateLeaveRequest(
     companyId: string,
     id: string,
-    updates: Partial<Pick<LeaveRequestEntity, 'status' | 'reviewedBy' | 'reviewedAt' | 'reviewNotes'>>
+    updates: Partial<Pick<LeaveRequestEntity, 'status' | 'startDate' | 'endDate' | 'totalDays' | 'reviewedBy' | 'reviewedAt' | 'reviewNotes'>>
   ): Promise<LeaveRequestEntity | null> {
     const existing = await this.findLeaveRequestById(companyId, id);
     if (!existing) return null;
@@ -3816,10 +3873,13 @@ export class DatabaseService implements OnModuleInit {
         const { data: row, error } = await this.supabase
           .from('leave_requests')
           .update({
-            status: updates.status,
-            reviewed_by: updates.reviewedBy || null,
-            reviewed_at: updates.reviewedAt?.toISOString() || null,
-            review_notes: updates.reviewNotes || null,
+            ...(updates.status !== undefined ? { status: updates.status } : {}),
+            ...(updates.startDate !== undefined ? { start_date: updates.startDate } : {}),
+            ...(updates.endDate !== undefined ? { end_date: updates.endDate } : {}),
+            ...(updates.totalDays !== undefined ? { total_days: updates.totalDays } : {}),
+            ...(updates.reviewedBy !== undefined ? { reviewed_by: updates.reviewedBy || null } : {}),
+            ...(updates.reviewedAt !== undefined ? { reviewed_at: updates.reviewedAt?.toISOString() || null } : {}),
+            ...(updates.reviewNotes !== undefined ? { review_notes: updates.reviewNotes || null } : {}),
             updated_at: now.toISOString(),
           })
           .eq('id', id)
@@ -5986,12 +6046,71 @@ export class DatabaseService implements OnModuleInit {
       if (
         msg.companyId === companyId &&
         msg.conversationId === conversationId &&
-        msg.senderRole === targetSenderRole &&
         !msg.isRead
       ) {
-        msg.isRead = true;
-        msg.readAt = now;
-        this.chatMessages.set(msg.id, msg);
+        const isFromOtherParty =
+          readerRole === 'COMPANY'
+            ? msg.senderRole?.toUpperCase() !== 'COMPANY'
+            : msg.senderRole?.toUpperCase() !== 'EMPLOYEE';
+        if (isFromOtherParty) {
+          msg.isRead = true;
+          msg.readAt = now;
+          this.chatMessages.set(msg.id, msg);
+        }
+      }
+    }
+  }
+
+  async markAllChatMessagesAsRead(
+    companyId: string,
+    readerRole: 'COMPANY' | 'EMPLOYEE',
+    employeeId?: string
+  ): Promise<void> {
+    const targetSenderRole = readerRole === 'COMPANY' ? 'EMPLOYEE' : 'COMPANY';
+    const now = new Date();
+
+    if (this.supabase) {
+      try {
+        let query = this.supabase
+          .from('chat_messages')
+          .update({ is_read: true, read_at: now.toISOString() })
+          .eq('company_id', companyId)
+          .eq('sender_role', targetSenderRole)
+          .eq('is_read', false);
+
+        if (readerRole === 'EMPLOYEE' && employeeId) {
+          const conv = await this.findChatConversationByEmployee(companyId, employeeId);
+          if (conv) {
+            query = query.eq('conversation_id', conv.id);
+          }
+        }
+
+        await query;
+      } catch (err: any) {
+        this.logger.error(`Supabase markAllChatMessagesAsRead exception: ${err.message}`);
+      }
+    }
+
+    for (const msg of this.chatMessages.values()) {
+      if (msg.companyId === companyId && !msg.isRead) {
+        const isFromOtherParty =
+          readerRole === 'COMPANY'
+            ? msg.senderRole?.toUpperCase() !== 'COMPANY'
+            : msg.senderRole?.toUpperCase() !== 'EMPLOYEE';
+        if (isFromOtherParty) {
+          if (readerRole === 'EMPLOYEE' && employeeId) {
+            const conv = this.chatConversations.get(msg.conversationId);
+            if (conv && conv.employeeId === employeeId) {
+              msg.isRead = true;
+              msg.readAt = now;
+              this.chatMessages.set(msg.id, msg);
+            }
+          } else {
+            msg.isRead = true;
+            msg.readAt = now;
+            this.chatMessages.set(msg.id, msg);
+          }
+        }
       }
     }
   }
@@ -6028,14 +6147,20 @@ export class DatabaseService implements OnModuleInit {
 
     let unreadCount = 0;
     for (const msg of this.chatMessages.values()) {
-      if (msg.companyId === companyId && msg.senderRole === targetSenderRole && !msg.isRead) {
-        if (role === 'EMPLOYEE' && employeeId) {
-          const conv = this.chatConversations.get(msg.conversationId);
-          if (conv && conv.employeeId === employeeId) {
+      if (msg.companyId === companyId && !msg.isRead) {
+        const isFromOtherParty =
+          role === 'COMPANY'
+            ? msg.senderRole?.toUpperCase() !== 'COMPANY'
+            : msg.senderRole?.toUpperCase() !== 'EMPLOYEE';
+        if (isFromOtherParty) {
+          if (role === 'EMPLOYEE' && employeeId) {
+            const conv = this.chatConversations.get(msg.conversationId);
+            if (conv && conv.employeeId === employeeId) {
+              unreadCount++;
+            }
+          } else {
             unreadCount++;
           }
-        } else {
-          unreadCount++;
         }
       }
     }

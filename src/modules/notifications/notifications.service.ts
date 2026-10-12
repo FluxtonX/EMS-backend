@@ -180,6 +180,45 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Domain Trigger: Leave Requested (Submitted by Employee)
+   */
+  async notifyLeaveRequested(
+    companyId: string,
+    employeeId: string,
+    leaveType: string,
+    startDate: string,
+    endDate: string,
+    totalDays: number,
+    reason?: string
+  ): Promise<void> {
+    const employee = await this.db.findEmployeeById(companyId, employeeId);
+    const empName = employee ? `${employee.firstName} ${employee.lastName}` : 'An employee';
+    const dateRange = startDate === endDate ? startDate : `${startDate} to ${endDate}`;
+    const title = `New Leave Request from ${empName}`;
+    const message = `${empName} has requested ${totalDays} day(s) of ${leaveType} leave for ${dateRange}.${reason ? ` Reason: "${reason}"` : ''}`;
+
+    await this.create(
+      companyId,
+      {
+        title,
+        message,
+        type: 'leave_decision',
+        priority: 'high',
+        actionUrl: '/leave',
+        metadata: {
+          employeeId,
+          employeeName: empName,
+          leaveType,
+          startDate,
+          endDate,
+          totalDays,
+          reason,
+        },
+      }
+    );
+  }
+
+  /**
    * Domain Trigger: Shift Assigned
    */
   async notifyShiftAssigned(

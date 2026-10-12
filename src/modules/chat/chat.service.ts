@@ -311,6 +311,26 @@ export class ChatService {
   }
 
   /**
+   * Mark all unread incoming messages across all conversations as read
+   */
+  async markAllAsRead(
+    companyId: string,
+    user: AuthenticatedUser
+  ): Promise<{ success: boolean }> {
+    const isEmployee = user.role === Role.Employee;
+    const readerRole = isEmployee ? 'EMPLOYEE' : 'COMPANY';
+    let employeeId: string | undefined = undefined;
+
+    if (isEmployee) {
+      const emp = await this.resolveEmployeeForUser(companyId, user.id);
+      if (emp) employeeId = emp.id;
+    }
+
+    await this.db.markAllChatMessagesAsRead(companyId, readerRole, employeeId);
+    return { success: true };
+  }
+
+  /**
    * Unread badge counter for header / sidebar
    */
   async getUnreadCount(companyId: string, user: AuthenticatedUser): Promise<{ unreadCount: number }> {

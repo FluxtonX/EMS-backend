@@ -16,6 +16,25 @@ import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { QueryLeaveRequestsDto } from './dto/query-leave-requests.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 
+export function calculateWorkingDays(startDate: string, endDate: string): number {
+  const sParts = startDate.split('-').map(Number);
+  const eParts = endDate.split('-').map(Number);
+  if (sParts.length < 3 || eParts.length < 3) return 1;
+  const start = new Date(Date.UTC(sParts[0], sParts[1] - 1, sParts[2]));
+  const end = new Date(Date.UTC(eParts[0], eParts[1] - 1, eParts[2]));
+  if (end < start) return 0;
+  let count = 0;
+  let totalCalendarDays = 0;
+  const current = new Date(start);
+  while (current <= end) {
+    totalCalendarDays++;
+    const dow = current.getUTCDay();
+    if (dow !== 0 && dow !== 6) count++;
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return count > 0 ? count : Math.max(1, totalCalendarDays);
+}
+
 @Injectable()
 export class LeaveService {
   private readonly logger = new Logger(LeaveService.name);
@@ -26,22 +45,7 @@ export class LeaveService {
   ) {}
 
   private calculateWorkingDays(startDate: string, endDate: string): number {
-    const sParts = startDate.split('-').map(Number);
-    const eParts = endDate.split('-').map(Number);
-    if (sParts.length < 3 || eParts.length < 3) return 1;
-    const start = new Date(Date.UTC(sParts[0], sParts[1] - 1, sParts[2]));
-    const end = new Date(Date.UTC(eParts[0], eParts[1] - 1, eParts[2]));
-    if (end < start) return 0;
-    let count = 0;
-    let totalCalendarDays = 0;
-    const current = new Date(start);
-    while (current <= end) {
-      totalCalendarDays++;
-      const dow = current.getUTCDay();
-      if (dow !== 0 && dow !== 6) count++;
-      current.setUTCDate(current.getUTCDate() + 1);
-    }
-    return count > 0 ? count : Math.max(1, totalCalendarDays);
+    return calculateWorkingDays(startDate, endDate);
   }
 
   async createLeaveRequest(
@@ -97,6 +101,21 @@ export class LeaveService {
     });
 
     this.logger.log(`Leave request created: ${leave.id} for employee ${dto.employeeId}`);
+
+    if (this.notificationsService) {
+      this.notificationsService
+        .notifyLeaveRequested(
+          companyId,
+          dto.employeeId,
+          dto.leaveType,
+          dto.startDate,
+          dto.endDate,
+          totalDays,
+          dto.reason
+        )
+        .catch((err) => this.logger.error(`Error notifying leave request: ${err.message}`));
+    }
+
     return leave;
   }
 

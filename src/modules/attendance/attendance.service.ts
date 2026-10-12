@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import {
   DatabaseService,
@@ -16,6 +17,8 @@ import { ClockInDto } from './dto/clock-in.dto';
 import { ClockOutDto } from './dto/clock-out.dto';
 import { ReconcileAttendanceDto } from './dto/reconcile-attendance.dto';
 import { QueryAttendanceDto } from './dto/query-attendance.dto';
+import { calculateWorkingDays } from '../leave/leave.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export function calculateDistanceMeters(
   lat1: number,
@@ -40,7 +43,10 @@ export function calculateDistanceMeters(
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
 
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    @Optional() private readonly notificationsService?: NotificationsService
+  ) {}
 
   async clockIn(companyId: string, dto: ClockInDto, userId?: string) {
     // 1. Verify Employee
@@ -120,7 +126,104 @@ export class AttendanceService {
       }
     }
 
-    // 6. Create Attendance Record
+    // 6. Check for approved leave on the clock-in date and convert to active attendance
+    const clockInDate = new Date();
+    const todayUtc = clockInDate.toISOString().split('T')[0];
+    const todayLondon = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(clockInDate);
+
+    try {
+      const activeLeaves = await this.databaseService.findLeaveRequests(companyId, {
+        employeeId: dto.employeeId,
+        status: 'approved',
+      });
+
+      const overlappingLeave = activeLeaves.find(
+        (l) =>
+          (l.startDate <= todayUtc && l.endDate >= todayUtc) ||
+          (l.startDate <= todayLondon && l.endDate >= todayLondon)
+      );
+
+      if (overlappingLeave) {
+        const leaveDay =
+          overlappingLeave.startDate <= todayLondon && overlappingLeave.endDate >= todayLondon
+            ? todayLondon
+            : todayUtc;
+
+        this.logger.log(
+          `Employee ${employee.employeeNumber} checked in on approved leave date (${leaveDay}). Overriding leave request ${overlappingLeave.id} so it is counted as active attendance work day.`
+        );
+
+        if (overlappingLeave.startDate === overlappingLeave.endDate) {
+          // Single-day leave: cancel it and mark it superseded so it is NOT counted in leave
+          await this.databaseService.updateLeaveRequest(companyId, overlappingLeave.id, {
+            status: 'cancelled',
+            reviewNotes: `Superseded by employee check-in on ${leaveDay} (counted as worked attendance day).`,
+          });
+        } else if (overlappingLeave.startDate === leaveDay) {
+          // First day of multi-day leave: move startDate to next day
+          const s = new Date(overlappingLeave.startDate);
+          s.setUTCDate(s.getUTCDate() + 1);
+          const nextDayStr = s.toISOString().split('T')[0];
+          const newTotalDays = Math.max(1, calculateWorkingDays(nextDayStr, overlappingLeave.endDate));
+          await this.databaseService.updateLeaveRequest(companyId, overlappingLeave.id, {
+            startDate: nextDayStr,
+            totalDays: newTotalDays,
+            reviewNotes:
+              (overlappingLeave.reviewNotes ? overlappingLeave.reviewNotes + ' | ' : '') +
+              `Day ${leaveDay} worked on-duty - converted to attendance.`,
+          });
+        } else if (overlappingLeave.endDate === leaveDay) {
+          // Last day of multi-day leave: move endDate to previous day
+          const e = new Date(overlappingLeave.endDate);
+          e.setUTCDate(e.getUTCDate() - 1);
+          const prevDayStr = e.toISOString().split('T')[0];
+          const newTotalDays = Math.max(1, calculateWorkingDays(overlappingLeave.startDate, prevDayStr));
+          await this.databaseService.updateLeaveRequest(companyId, overlappingLeave.id, {
+            endDate: prevDayStr,
+            totalDays: newTotalDays,
+            reviewNotes:
+              (overlappingLeave.reviewNotes ? overlappingLeave.reviewNotes + ' | ' : '') +
+              `Day ${leaveDay} worked on-duty - converted to attendance.`,
+          });
+        } else {
+          // Middle day of multi-day leave: decrement 1 working day
+          const newTotalDays = Math.max(1, overlappingLeave.totalDays - 1);
+          await this.databaseService.updateLeaveRequest(companyId, overlappingLeave.id, {
+            totalDays: newTotalDays,
+            reviewNotes:
+              (overlappingLeave.reviewNotes ? overlappingLeave.reviewNotes + ' | ' : '') +
+              `Day ${leaveDay} worked on-duty - converted to attendance.`,
+          });
+        }
+
+        if (this.notificationsService) {
+          this.notificationsService
+            .create(
+              companyId,
+              {
+                title: 'Attendance Recorded on Leave Day',
+                message: `Employee ${employee.firstName} ${employee.lastName} checked in on ${leaveDay}. Scheduled leave was converted to active working attendance, preserving leave balance.`,
+                type: 'leave_decision',
+                priority: 'normal',
+                actionUrl: '/attendance',
+                metadata: {
+                  employeeId: employee.id,
+                  date: leaveDay,
+                  convertedToAttendance: true,
+                },
+              },
+              employee.email
+            )
+            .catch((err) =>
+              this.logger.warn(`Failed to dispatch leave-attendance notification: ${err.message}`)
+            );
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`Error processing leave override on clock-in: ${err.message}`);
+    }
+
+    // 7. Create Attendance Record
     const record = await this.databaseService.createAttendanceRecord({
       companyId,
       shiftId: dto.shiftId,
