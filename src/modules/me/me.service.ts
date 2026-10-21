@@ -422,20 +422,33 @@ export class MeService {
     const employee = await this.getEmployeeForUser(companyId, user);
     const requests = await this.db.findLeaveRequests(companyId, { employeeId: employee.id });
 
-    const approvedDays = requests
-      .filter((r) => r.status === 'approved')
+    const currentYear = new Date().getFullYear();
+    const thisYearRequests = requests.filter((r) => {
+      const year = new Date(r.startDate).getFullYear();
+      return year === currentYear;
+    });
+
+    // Only Annual Leave deducts from statutory holiday entitlement (28 days UK standard)
+    const approvedAnnualDays = thisYearRequests
+      .filter((r) => r.status === 'approved' && r.leaveType === 'annual')
       .reduce((sum, r) => sum + r.totalDays, 0);
 
-    const pendingDays = requests
-      .filter((r) => r.status === 'pending')
+    const pendingAnnualDays = thisYearRequests
+      .filter((r) => r.status === 'pending' && r.leaveType === 'annual')
+      .reduce((sum, r) => sum + r.totalDays, 0);
+
+    // Track absence days (sick, emergency, unpaid) separately without deducting from holiday allowance
+    const absenceDaysThisYear = thisYearRequests
+      .filter((r) => r.status === 'approved' && r.leaveType !== 'annual')
       .reduce((sum, r) => sum + r.totalDays, 0);
 
     return {
       entitlement: {
         annualTotal: 28,
-        approvedDays,
-        pendingDays,
-        remainingDays: Math.max(0, 28 - approvedDays),
+        approvedDays: approvedAnnualDays,
+        pendingDays: pendingAnnualDays,
+        remainingDays: Math.max(0, 28 - approvedAnnualDays),
+        absenceDaysThisYear,
       },
       requests: requests.sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()

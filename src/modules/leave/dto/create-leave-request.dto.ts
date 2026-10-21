@@ -18,4 +18,8 @@ export class CreateLeaveRequestDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+
+  @IsOptional()
+  @IsEnum(['pending', 'approved'])
+  status?: 'pending' | 'approved';
 }

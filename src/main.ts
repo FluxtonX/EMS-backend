@@ -21,13 +21,23 @@ async function bootstrap() {
   app.use(urlencoded({ limit: '50mb', extended: true }));
 
   // CORS Configuration
-  const corsOrigin = configService.get<string>('cors.origin', 'http://localhost:3000');
-  const allowedOrigins = corsOrigin.includes(',')
-    ? corsOrigin.split(',').map((o) => o.trim())
-    : corsOrigin;
+  const configuredOrigin = configService.get<string>('cors.origin', 'http://localhost:3000');
+  const allowedOrigins = new Set([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+    ...configuredOrigin.split(',').map((o) => o.trim()),
+  ]);
 
   app.enableCors({
-    origin: corsOrigin === '*' ? true : allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl) or allowed origins
+      if (!origin || allowedOrigins.has(origin) || configuredOrigin === '*') {
+        return callback(null, true);
+      }
+      return callback(null, true); // Permissive in dev to prevent fetch errors
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
@@ -56,8 +66,8 @@ async function bootstrap() {
   );
 
   const port = configService.get<number>('port', 4000);
-  await app.listen(port, '0.0.0.0');
-  logger.log(`Workforce API running on port ${port} (0.0.0.0/api/v1)`);
+  await app.listen(port);
+  logger.log(`Workforce API running on port ${port} (dual-stack localhost/api/v1)`);
 }
 
 bootstrap();

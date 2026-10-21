@@ -392,8 +392,8 @@ export class AuthService {
       'jwt.secret',
       'production_grade_secret_key_minimum_32_characters_for_hmac_sha256'
     );
-    const expiresIn = this.configService.get<string>('jwt.expiresIn', '15m');
-    const refreshExpiresIn = this.configService.get<string>('jwt.refreshExpiresIn', '7d');
+    const expiresIn = this.configService.get<string>('jwt.expiresIn', '7d');
+    const refreshExpiresIn = this.configService.get<string>('jwt.refreshExpiresIn', '30d');
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, { secret, expiresIn: expiresIn as any }),

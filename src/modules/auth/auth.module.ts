@@ -18,7 +18,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
           'production_grade_secret_key_minimum_32_characters_for_hmac_sha256'
         ),
         signOptions: {
-          expiresIn: config.get<string>('jwt.expiresIn', '15m') as any,
+          expiresIn: config.get<string>('jwt.expiresIn', '7d') as any,
         },
       }),
     }),

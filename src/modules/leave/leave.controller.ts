@@ -42,8 +42,7 @@ export class LeaveController {
     @Body() dto: CreateLeaveRequestDto,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    const leave = await this.leaveService.createLeaveRequest(companyId, dto, user.id);
-    return { data: leave };
+    return this.leaveService.createLeaveRequest(companyId, dto, user.id);
   }
 
   /**
@@ -56,8 +55,7 @@ export class LeaveController {
     @TenantId() companyId: string,
     @Query() query: QueryLeaveRequestsDto
   ) {
-    const results = await this.leaveService.findAll(companyId, query);
-    return { data: results };
+    return this.leaveService.findAll(companyId, query);
   }
 
   /**
@@ -67,8 +65,7 @@ export class LeaveController {
   @Get(':id')
   @RequirePermissions(Permission.LEAVE_REQUEST)
   async findOne(@TenantId() companyId: string, @Param('id') id: string) {
-    const leave = await this.leaveService.findOne(companyId, id);
-    return { data: leave };
+    return this.leaveService.findOne(companyId, id);
   }
 
   /**
@@ -81,8 +78,7 @@ export class LeaveController {
     @TenantId() companyId: string,
     @Param('employeeId') employeeId: string
   ) {
-    const stats = await this.leaveService.getLeaveStats(companyId, employeeId);
-    return { data: stats };
+    return this.leaveService.getLeaveStats(companyId, employeeId);
   }
 
   /**
@@ -97,13 +93,12 @@ export class LeaveController {
     @Body() dto: ReviewLeaveRequestDto,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    const leave = await this.leaveService.reviewLeaveRequest(
+    return this.leaveService.reviewLeaveRequest(
       companyId,
       id,
       dto,
       user.id
     );
-    return { data: leave };
   }
 
   /**
@@ -118,7 +113,6 @@ export class LeaveController {
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    const leave = await this.leaveService.cancelLeaveRequest(companyId, id);
-    return { data: leave };
+    return this.leaveService.cancelLeaveRequest(companyId, id);
   }
 }

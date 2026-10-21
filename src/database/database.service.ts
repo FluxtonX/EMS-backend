@@ -563,7 +563,7 @@ export class DatabaseService implements OnModuleInit {
 
   constructor(@Optional() private configService?: ConfigService) {}
 
-  onModuleInit() {
+  async onModuleInit() {
     const supabaseUrl = this.configService?.get<string>('database.supabaseUrl');
     const supabaseKey = this.configService?.get<string>('database.supabaseKey');
 
@@ -576,13 +576,23 @@ export class DatabaseService implements OnModuleInit {
       !supabaseKey.includes('placeholder')
     ) {
       try {
+        // Test connectivity first with a 3s timeout to ensure DNS and cluster are alive
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        await fetch(`${supabaseUrl}/rest/v1/`, {
+          headers: { apikey: supabaseKey },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
         this.supabase = createClient(supabaseUrl, supabaseKey, {
           auth: { persistSession: false },
           realtime: { transport: WebSocket as any },
         });
         this.logger.log('Connected to Supabase PostgreSQL cluster.');
       } catch (err: any) {
-        this.logger.warn(`Supabase client initialization deferred: ${err.message}`);
+        this.supabase = null;
+        this.logger.warn(`Supabase cluster unreachable or paused (${err.message}). Seamlessly operating in decoupled memory storage mode.`);
       }
     } else {
       this.logger.log('Running in decoupled memory storage mode with placeholder credentials or test environment.');
@@ -3698,7 +3708,7 @@ export class DatabaseService implements OnModuleInit {
       leaveType: row.leave_type,
       startDate: row.start_date,
       endDate: row.end_date,
-      totalDays: Number(row.total_days),
+      totalDays: Number(row.working_days ?? row.total_days ?? 1),
       reason: row.reason || undefined,
       status: row.status,
       reviewedBy: row.reviewed_by || undefined,
@@ -3737,7 +3747,7 @@ export class DatabaseService implements OnModuleInit {
             leave_type: data.leaveType,
             start_date: data.startDate,
             end_date: data.endDate,
-            total_days: data.totalDays,
+            working_days: data.totalDays,
             reason: data.reason || null,
             status: data.status,
             created_at: now.toISOString(),
@@ -3876,7 +3886,7 @@ export class DatabaseService implements OnModuleInit {
             ...(updates.status !== undefined ? { status: updates.status } : {}),
             ...(updates.startDate !== undefined ? { start_date: updates.startDate } : {}),
             ...(updates.endDate !== undefined ? { end_date: updates.endDate } : {}),
-            ...(updates.totalDays !== undefined ? { total_days: updates.totalDays } : {}),
+            ...(updates.totalDays !== undefined ? { working_days: updates.totalDays } : {}),
             ...(updates.reviewedBy !== undefined ? { reviewed_by: updates.reviewedBy || null } : {}),
             ...(updates.reviewedAt !== undefined ? { reviewed_at: updates.reviewedAt?.toISOString() || null } : {}),
             ...(updates.reviewNotes !== undefined ? { review_notes: updates.reviewNotes || null } : {}),

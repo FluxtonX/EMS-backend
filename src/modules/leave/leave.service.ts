@@ -90,6 +90,7 @@ export class LeaveService {
       throw new BadRequestException('No working days in the selected date range');
     }
 
+    const initialStatus = dto.status || 'pending';
     const leave = await this.db.createLeaveRequest(companyId, {
       employeeId: dto.employeeId,
       leaveType: dto.leaveType,
@@ -97,7 +98,9 @@ export class LeaveService {
       endDate: dto.endDate,
       totalDays,
       reason: dto.reason,
-      status: 'pending',
+      status: initialStatus,
+      reviewedBy: initialStatus === 'approved' ? requestingUserId : undefined,
+      reviewedAt: initialStatus === 'approved' ? new Date() : undefined,
     });
 
     this.logger.log(`Leave request created: ${leave.id} for employee ${dto.employeeId}`);
@@ -159,6 +162,27 @@ export class LeaveService {
 
     if (!updated) throw new NotFoundException(`Leave request ${id} not found`);
     this.logger.log(`Leave request ${id} ${dto.status} by user ${reviewerUserId}`);
+
+    if (dto.status === 'approved') {
+      try {
+        const conflictingShifts = await this.db.findShifts(companyId, {
+          employeeId: leave.employeeId,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+        });
+        for (const shift of conflictingShifts) {
+          if (shift.status === 'scheduled' || (shift.status as string) === 'published') {
+            await this.db.updateShift(companyId, shift.id, {
+              status: 'cancelled',
+              notes: `Cancelled: Approved ${leave.leaveType} leave`,
+            });
+            this.logger.log(`Released shift ${shift.id} on ${shift.shiftDate} due to approved leave.`);
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Could not cancel conflicting shifts: ${err.message}`);
+      }
+    }
 
     if (this.notificationsService) {
       this.notificationsService

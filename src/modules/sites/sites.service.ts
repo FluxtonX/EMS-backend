@@ -76,6 +76,9 @@ export class SitesService {
       newValue: { name: site.name, code: site.code },
     });
 
+    // Automatically seed standard roles (Officer, Door Supervisor, CCTV) with rates
+    await this.seedDefaultSiteJobs(companyId, site.id);
+
     return site;
   }
 
@@ -148,7 +151,51 @@ export class SitesService {
     if (!site) {
       throw new NotFoundException(`Site '${siteId}' not found.`);
     }
+    const existing = await this.db.findSiteJobs(companyId, siteId);
+    if (existing && existing.length > 0) {
+      return existing;
+    }
+
+    // Auto-seed standard operational roles and billing rates so user is never blocked
+    await this.seedDefaultSiteJobs(companyId, siteId);
     return this.db.findSiteJobs(companyId, siteId);
+  }
+
+  private async seedDefaultSiteJobs(companyId: string, siteId: string) {
+    try {
+      const defaultRoles = [
+        { name: 'Security Officer', pay: 14.0, bill: 20.0, desc: 'Standard guarding, patrol and access post' },
+        { name: 'Door Supervisor', pay: 15.5, bill: 22.5, desc: 'Licensed entry control and venue security' },
+        { name: 'CCTV Controller', pay: 16.5, bill: 24.0, desc: 'Surveillance control room and incident dispatch' },
+      ];
+
+      for (const role of defaultRoles) {
+        let jt = await this.db.findJobTypeByName(companyId, role.name);
+        if (!jt) {
+          jt = await this.db.createJobType({
+            companyId,
+            name: role.name,
+            description: role.desc,
+            isActive: true,
+          });
+        }
+
+        const existingPair = await this.db.findSiteJobByPair(companyId, siteId, jt.id);
+        if (!existingPair) {
+          await this.db.createSiteJob({
+            companyId,
+            siteId,
+            jobTypeId: jt.id,
+            defaultPayRate: role.pay,
+            billingRate: role.bill,
+            currency: 'GBP',
+            status: 'active',
+          });
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Could not auto-seed site jobs: ${err.message}`);
+    }
   }
 
   async addSiteJob(companyId: string, actorId: string, siteId: string, dto: AddSiteJobDto) {
