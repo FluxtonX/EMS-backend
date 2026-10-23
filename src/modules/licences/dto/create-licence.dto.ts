@@ -1,4 +1,5 @@
 import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateLicenceDto {
   @IsNotEmpty()
@@ -7,6 +8,7 @@ export class CreateLicenceDto {
 
   @IsNotEmpty()
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\D/g, '') : value))
   @Matches(/^\d{16}$/, { message: 'SIA licenceNumber must be exactly 16 digits' })
   licenceNumber: string;
 

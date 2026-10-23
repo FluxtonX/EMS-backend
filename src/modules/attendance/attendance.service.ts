@@ -93,11 +93,14 @@ export class AttendanceService {
         site.longitude
       );
       const radius = site.geofenceRadius || 200;
-      if (clockInDistance > radius) {
+      // Tolerant accuracy buffer for mobile GPS drift (up to 100m)
+      const accuracyBuffer = Math.min(Math.max(0, dto.accuracy || 0), 100);
+      const effectiveDistance = Math.max(0, clockInDistance - accuracyBuffer);
+      if (effectiveDistance > radius) {
         clockInVerified = false;
         varianceFlag = 'out_of_geofence';
         this.logger.warn(
-          `Out-of-geofence clock-in: Employee ${employee.employeeNumber} is ${clockInDistance}m from site (max: ${radius}m)`
+          `Out-of-geofence clock-in: Employee ${employee.employeeNumber} is ${clockInDistance}m from site (effective: ${effectiveDistance}m, max: ${radius}m)`
         );
       }
     }
@@ -356,9 +359,11 @@ export class AttendanceService {
         site.longitude
       );
       const radius = site.geofenceRadius || 200;
-      if (clockOutDistance > radius) {
+      const accuracyBuffer = Math.min(Math.max(0, dto.accuracy || 0), 100);
+      const effectiveDistance = Math.max(0, clockOutDistance - accuracyBuffer);
+      if (effectiveDistance > radius) {
         clockOutVerified = false;
-        this.logger.warn(`Out-of-geofence clock-out: ${clockOutDistance}m from site`);
+        this.logger.warn(`Out-of-geofence clock-out: ${clockOutDistance}m from site (effective: ${effectiveDistance}m)`);
       }
     }
 

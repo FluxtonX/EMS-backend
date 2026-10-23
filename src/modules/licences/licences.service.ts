@@ -3,8 +3,10 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { DatabaseService, LicenceEntity, LicenceStatus } from '../../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateLicenceDto } from './dto/create-licence.dto';
 import { UpdateLicenceDto } from './dto/update-licence.dto';
 import { VerifyLicenceDto } from './dto/verify-licence.dto';
@@ -14,7 +16,10 @@ import { QueryLicencesDto } from './dto/query-licences.dto';
 export class LicencesService {
   private readonly logger = new Logger(LicencesService.name);
 
-  constructor(private db: DatabaseService) {}
+  constructor(
+    private db: DatabaseService,
+    @Optional() private readonly notificationsService?: NotificationsService
+  ) {}
 
   private calculateExpiryStatus(expiryDateStr: string): LicenceStatus {
     const expiry = new Date(expiryDateStr);
@@ -108,6 +113,28 @@ export class LicencesService {
       },
     });
 
+    // Notify company owners & compliance managers immediately
+    if (this.notificationsService) {
+      try {
+        await this.notificationsService.create(companyId, {
+          title: `New SIA Licence Submitted: ${employee.firstName} ${employee.lastName}`,
+          message: `Officer ${employee.firstName} ${employee.lastName} (${employee.employeeNumber}) submitted an SIA ${licence.licenceType} licence (${licence.licenceNumber}) with badge photo for verification.`,
+          type: 'compliance_alert',
+          priority: 'high',
+          actionUrl: '/compliance',
+          metadata: {
+            licenceId: licence.id,
+            employeeId: employee.id,
+            employeeName: `${employee.firstName} ${employee.lastName}`,
+            licenceNumber: licence.licenceNumber,
+            licenceType: licence.licenceType,
+          },
+        });
+      } catch (err: any) {
+        this.logger.error(`Failed to dispatch licence submission notification: ${err.message}`);
+      }
+    }
+
     return licence;
   }
 
@@ -194,6 +221,32 @@ export class LicencesService {
       oldValue: { status: existing.status },
       newValue: { status: dto.status, verifiedBy: actorId },
     });
+
+    // Notify employee of approval or rejection
+    if (this.notificationsService) {
+      try {
+        const employee = await this.db.findEmployeeById(companyId, existing.employeeId);
+        if (employee) {
+          const isApproved = dto.status === 'valid';
+          await this.notificationsService.create(companyId, {
+            userId: employee.userId,
+            title: isApproved ? 'SIA Licence Verified & Approved' : 'SIA Licence Submission Rejected',
+            message: isApproved
+              ? `Your ${existing.licenceType} licence (${existing.licenceNumber}) has been verified and approved by compliance.`
+              : `Your ${existing.licenceType} licence (${existing.licenceNumber}) was reviewed and rejected. Please re-check your badge photo or details and re-submit.`,
+            type: 'compliance_alert',
+            priority: isApproved ? 'normal' : 'high',
+            actionUrl: '/employee/licences',
+            metadata: {
+              licenceId: id,
+              status: dto.status,
+            },
+          });
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to dispatch licence verification notification: ${err.message}`);
+      }
+    }
 
     return updated;
   }
