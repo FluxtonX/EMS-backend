@@ -314,7 +314,7 @@ export class MeService {
     });
 
     const activePunch = (records || []).find(
-      (a) => a.status === 'clocked_in' && !a.clockOutTime
+      (a) => (a.status === 'clocked_in' || a.status === 'on_break') && !a.clockOutTime
     );
 
     return {
@@ -349,7 +349,7 @@ export class MeService {
       startDate: todayStr,
     });
     const alreadyClockedIn = (existing || []).find(
-      (a) => a.status === 'clocked_in' && !a.clockOutTime
+      (a) => (a.status === 'clocked_in' || a.status === 'on_break') && !a.clockOutTime
     );
     if (alreadyClockedIn) {
       throw new BadRequestException(
@@ -373,17 +373,55 @@ export class MeService {
   }
 
   /**
-   * Clock out with GPS coordinates
+   * Start rest break for active attendance session
    */
-  async clockOut(companyId: string, user: AuthenticatedUser, dto: MyClockOutDto) {
+  async startBreak(companyId: string, user: AuthenticatedUser) {
     const employee = await this.getEmployeeForUser(companyId, user);
-
-    // Locate active clock-in record
     const records = await this.attendanceService.findAll(companyId, {
       employeeId: employee.id,
     });
     const activePunch = (records || []).find(
       (a) => a.status === 'clocked_in' && !a.clockOutTime
+    );
+
+    if (!activePunch) {
+      throw new BadRequestException('No active duty session found to start a break. Must be clocked in.');
+    }
+
+    return this.attendanceService.startBreak(companyId, activePunch.id, user.id);
+  }
+
+  /**
+   * End rest break and resume duty
+   */
+  async endBreak(companyId: string, user: AuthenticatedUser) {
+    const employee = await this.getEmployeeForUser(companyId, user);
+    const records = await this.attendanceService.findAll(companyId, {
+      employeeId: employee.id,
+    });
+    const activeBreak = (records || []).find(
+      (a) => a.status === 'on_break' && !a.clockOutTime
+    );
+
+    if (!activeBreak) {
+      throw new BadRequestException('No active on-break session found to end.');
+    }
+
+    return this.attendanceService.endBreak(companyId, activeBreak.id, user.id);
+  }
+
+  /**
+   * Clock out with GPS coordinates
+   */
+  async clockOut(companyId: string, user: AuthenticatedUser, dto: MyClockOutDto) {
+    const employee = await this.getEmployeeForUser(companyId, user);
+
+    // Locate active clock-in or on-break record
+    const records = await this.attendanceService.findAll(companyId, {
+      employeeId: employee.id,
+    });
+    const activePunch = (records || []).find(
+      (a) => (a.status === 'clocked_in' || a.status === 'on_break') && !a.clockOutTime
     );
 
     if (!activePunch) {
@@ -473,5 +511,74 @@ export class MeService {
       },
       user.id
     );
+  }
+
+  /**
+   * Comprehensive Employee Earnings & Financial Ledger
+   */
+  async getEarnings(companyId: string, user: AuthenticatedUser) {
+    const employee = await this.getEmployeeForUser(companyId, user);
+
+    // 1. Fetch employee's active assignment for baseline contracted rate
+    const assignment = await this.db.findActiveAssignmentByEmployeeId(companyId, employee.id);
+    const hourlyRate = assignment?.payRate
+      ? Number(assignment.payRate)
+      : (assignment as any)?.siteJob?.defaultPayRate
+      ? Number((assignment as any).siteJob.defaultPayRate)
+      : 15.0;
+
+    // 2. Fetch timesheets
+    const timesheets = await this.db.findTimesheets(companyId, {
+      employeeId: employee.id,
+    });
+
+    // 3. Fetch payslips
+    const payslips = await this.db.findPayslips(companyId, {
+      employeeId: employee.id,
+    });
+
+    // 4. Fetch recent attendance records to calculate unbilled / pending hours
+    const recentAttendance = await this.attendanceService.findAll(companyId, {
+      employeeId: employee.id,
+    });
+
+    // Sum completed attendance not yet finalized into locked timesheets
+    const unapprovedAttendance = (recentAttendance || []).filter(
+      (a) => a.clockOutTime && a.status !== 'rejected' && a.totalHours > 0
+    );
+
+    // Approved gross earnings from timesheets
+    const approvedTimesheets = timesheets.filter((t) => t.status === 'approved' || t.status === 'locked');
+    const approvedGrossEarnings = approvedTimesheets.reduce((sum, t) => sum + (Number(t.grossPay) || 0), 0);
+    const approvedTotalHours = approvedTimesheets.reduce((sum, t) => sum + (Number(t.totalHours) || 0), 0);
+
+    // Total disbursements received (paid payslips)
+    const paidPayslips = payslips.filter((p) => p.status === 'paid');
+    const totalNetPaid = paidPayslips.reduce((sum, p) => sum + (Number(p.netPay) || 0), 0);
+    const totalGrossPaid = paidPayslips.reduce((sum, p) => sum + (Number(p.grossPay) || 0), 0);
+
+    // In-progress / estimated unapproved hours and earnings
+    const pendingHours = unapprovedAttendance.reduce((sum, a) => sum + (Number(a.totalHours) || 0), 0);
+    const estimatedGrossWages = Math.round(pendingHours * hourlyRate * 100) / 100;
+
+    // Outstanding approved gross balance awaiting disbursement
+    const outstandingApproved = Math.max(0, Math.round((approvedGrossEarnings - totalGrossPaid) * 100) / 100);
+
+    return {
+      currency: 'GBP',
+      summary: {
+        contractedHourlyRate: hourlyRate,
+        estimatedGrossWages,
+        pendingHours: Math.round(pendingHours * 10) / 10,
+        approvedGrossEarnings: Math.round(approvedGrossEarnings * 100) / 100,
+        approvedTotalHours: Math.round(approvedTotalHours * 10) / 10,
+        totalNetPaid: Math.round(totalNetPaid * 100) / 100,
+        totalGrossPaid: Math.round(totalGrossPaid * 100) / 100,
+        outstandingApproved,
+      },
+      timesheets: timesheets || [],
+      payslips: payslips || [],
+      recentUnbilledShifts: unapprovedAttendance.slice(0, 10),
+    };
   }
 }

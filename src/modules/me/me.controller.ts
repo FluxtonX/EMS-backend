@@ -114,6 +114,24 @@ export class MeController {
     return this.meService.clockIn(companyId, user, dto);
   }
 
+  @Post('attendance/break/start')
+  @HttpCode(HttpStatus.OK)
+  async startBreak(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.meService.startBreak(companyId, user);
+  }
+
+  @Post('attendance/break/end')
+  @HttpCode(HttpStatus.OK)
+  async endBreak(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.meService.endBreak(companyId, user);
+  }
+
   @Post('attendance/clock-out')
   @HttpCode(HttpStatus.OK)
   async clockOut(
@@ -158,5 +176,13 @@ export class MeController {
     @Body() dto: MyLeaveRequestDto
   ) {
     return this.meService.createLeaveRequest(companyId, user, dto);
+  }
+
+  @Get('earnings')
+  async getEarnings(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.meService.getEarnings(companyId, user);
   }
 }

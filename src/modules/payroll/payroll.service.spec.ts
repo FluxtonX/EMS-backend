@@ -78,14 +78,31 @@ describe('PayrollService', () => {
   });
 
   describe('calculateUKDeductions', () => {
-    it('should accurately calculate UK basic tax and employee NI on £2,400 monthly pay', () => {
-      const { taxDeduction, nationalInsurance, netPay } = calculateUKDeductions(2400, 'monthly');
+    it('should accurately calculate UK basic tax, NI, and pension auto-enrolment on £2,400 monthly pay', () => {
+      const { taxDeduction, nationalInsurance, pensionEmployee, pensionEmployer, netPay } = calculateUKDeductions(2400, 'monthly', '1257L', true);
       // Taxable: 2400 - 1047.50 = 1352.50. Tax @ 20% = £270.50
       expect(taxDeduction).toBeCloseTo(270.5, 1);
       // NI: 2400 - 1048 = 1352. NI @ 8% = £108.16
       expect(nationalInsurance).toBeCloseTo(108.16, 1);
-      // Net pay: 2400 - 270.50 - 108.16 = £2021.34
-      expect(netPay).toBeCloseTo(2021.34, 1);
+      // Pension qualifying: 2400 - 520 = 1880. 5% Employee = £94.00, 3% Employer = £56.40
+      expect(pensionEmployee).toBeCloseTo(94.0, 1);
+      expect(pensionEmployer).toBeCloseTo(56.4, 1);
+      // Net pay: 2400 - 270.50 - 108.16 - 94.00 = £1927.34
+      expect(netPay).toBeCloseTo(1927.34, 1);
+    });
+
+    it('should calculate higher-rate 40% tax on executive earnings over £50,270/yr (£4,189.17/mo)', () => {
+      const { taxDeduction } = calculateUKDeductions(6000, 'monthly', '1257L', false);
+      // Basic band (£3,141.67) @ 20% = £628.33
+      // Higher band (6000 - 4189.17 = £1,810.83) @ 40% = £724.33
+      // Total tax ~ £1,352.67
+      expect(taxDeduction).toBeGreaterThan(1300);
+      expect(taxDeduction).toBeLessThan(1400);
+    });
+
+    it('should support BR flat 20% tax code for secondary employment', () => {
+      const { taxDeduction } = calculateUKDeductions(1000, 'monthly', 'BR', false);
+      expect(taxDeduction).toBe(200.0);
     });
   });
 

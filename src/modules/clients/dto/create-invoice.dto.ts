@@ -6,13 +6,25 @@ export class InvoiceLineItemDto {
   @IsNotEmpty()
   description: string;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  hours: number;
+  hours?: number;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  rate: number;
+  quantityHours?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  rate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number;
 
   @IsOptional()
   @IsString()
@@ -52,5 +64,10 @@ export class CreateInvoiceDto {
 
   @IsOptional()
   @IsString()
+  currency?: string;
+
+  @IsOptional()
+  @IsString()
   notes?: string;
 }
+

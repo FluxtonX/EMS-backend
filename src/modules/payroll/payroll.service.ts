@@ -25,33 +25,95 @@ const UK_NI_EMPLOYEE_RATE = 0.08;            // 8% Class 1 NI
 export interface UKPayrollDeductionBreakdown {
   taxDeduction: number;
   nationalInsurance: number;
+  pensionEmployee: number;
+  pensionEmployer: number;
   netPay: number;
+  taxCode: string;
 }
 
-export function calculateUKDeductions(grossPay: number, frequency: 'weekly' | 'bi_weekly' | 'monthly' = 'monthly'): UKPayrollDeductionBreakdown {
-  let allowance = UK_MONTHLY_PERSONAL_ALLOWANCE;
-  let niThreshold = UK_NI_PRIMARY_THRESHOLD;
+export function calculateUKDeductions(
+  grossPay: number,
+  frequency: 'weekly' | 'bi_weekly' | 'monthly' = 'monthly',
+  taxCodeInput: string = '1257L',
+  includePension: boolean = true
+): UKPayrollDeductionBreakdown {
+  const code = (taxCodeInput || '1257L').toUpperCase().trim();
+  const divisor = frequency === 'weekly' ? 52 : frequency === 'bi_weekly' ? 26 : 12;
 
-  if (frequency === 'weekly') {
-    allowance = 241.73;
-    niThreshold = 242.0;
-  } else if (frequency === 'bi_weekly') {
-    allowance = 483.46;
-    niThreshold = 484.0;
+  // 1. Personal Allowance & Tax Band Calculation (Higher Rate Slabs)
+  let annualAllowance = 12570.0;
+  let flatRate: number | null = null;
+
+  if (code === 'BR') {
+    annualAllowance = 0;
+    flatRate = 0.20; // Basic Rate 20% flat on all income
+  } else if (code === 'D0') {
+    annualAllowance = 0;
+    flatRate = 0.40; // Higher Rate 40% flat on all income
+  } else if (code === '0T') {
+    annualAllowance = 0;
+  } else if (/^\d+L$/.test(code)) {
+    const num = parseInt(code.replace('L', ''), 10);
+    if (!isNaN(num)) annualAllowance = num * 10;
   }
 
-  // Tax calculation
-  const taxableIncome = Math.max(0, grossPay - allowance);
-  const taxDeduction = Math.round(taxableIncome * UK_BASIC_RATE_TAX * 100) / 100;
+  const allowance = annualAllowance / divisor;
+  const basicRateBand = (50270.0 - 12570.0) / divisor; // Up to £4,189.17/mo
+  const higherRateBand = (125140.0 - 50270.0) / divisor; // Up to £10,428.33/mo
 
-  // NI calculation
-  const niQualifyingIncome = Math.max(0, grossPay - niThreshold);
-  const nationalInsurance = Math.round(niQualifyingIncome * UK_NI_EMPLOYEE_RATE * 100) / 100;
+  let taxDeduction = 0;
+  if (flatRate !== null) {
+    taxDeduction = Math.round(grossPay * flatRate * 100) / 100;
+  } else {
+    const taxable = Math.max(0, grossPay - allowance);
+    const basicTaxable = Math.min(taxable, basicRateBand);
+    const higherTaxable = Math.min(Math.max(0, taxable - basicRateBand), higherRateBand);
+    const additionalTaxable = Math.max(0, taxable - basicRateBand - higherRateBand);
 
-  // Net pay
-  const netPay = Math.max(0, Math.round((grossPay - taxDeduction - nationalInsurance) * 100) / 100);
+    const taxAmount = (basicTaxable * 0.20) + (higherTaxable * 0.40) + (additionalTaxable * 0.45);
+    taxDeduction = Math.round(taxAmount * 100) / 100;
+  }
 
-  return { taxDeduction, nationalInsurance, netPay };
+  // 2. Class 1 National Insurance Calculation (2025/26 baseline)
+  const niPrimaryThreshold = 12576.0 / divisor; // £1,048/mo
+  const niUpperLimit = 50268.0 / divisor; // £4,189/mo
+
+  let nationalInsurance = 0;
+  if (grossPay > niPrimaryThreshold) {
+    const niStandard = Math.min(grossPay, niUpperLimit) - niPrimaryThreshold;
+    const niExcess = Math.max(0, grossPay - niUpperLimit);
+    nationalInsurance = Math.round(((niStandard * 0.08) + (niExcess * 0.02)) * 100) / 100;
+  }
+
+  // 3. UK Statutory Workplace Pension Auto-Enrolment (5% Employee / 3% Employer)
+  // Qualifying trigger: £10,000/yr (£833.33/mo). Qualifying band: £6,240 to £50,270/yr
+  const pensionTrigger = 10000.0 / divisor;
+  const pensionLower = 6240.0 / divisor;
+  const pensionUpper = 50270.0 / divisor;
+
+  let pensionEmployee = 0;
+  let pensionEmployer = 0;
+
+  if (includePension && grossPay >= pensionTrigger) {
+    const qualifyingEarnings = Math.max(0, Math.min(grossPay, pensionUpper) - pensionLower);
+    pensionEmployee = Math.round(qualifyingEarnings * 0.05 * 100) / 100;
+    pensionEmployer = Math.round(qualifyingEarnings * 0.03 * 100) / 100;
+  }
+
+  // 4. Net pay calculation
+  const netPay = Math.max(
+    0,
+    Math.round((grossPay - taxDeduction - nationalInsurance - pensionEmployee) * 100) / 100
+  );
+
+  return {
+    taxDeduction,
+    nationalInsurance,
+    pensionEmployee,
+    pensionEmployer,
+    netPay,
+    taxCode: code,
+  };
 }
 
 @Injectable()
@@ -62,7 +124,7 @@ export class PayrollService {
 
   /**
    * Generates a new Pay Run from approved timesheets or active employee allocations.
-   * Performs standard UK PAYE tax and National Insurance calculations,
+   * Performs standard UK PAYE tax, National Insurance, and Workplace Pension calculations,
    * creates immutable payslip snapshots, and tracks overall gross/net disbursement.
    */
   async createPayRun(companyId: string, dto: CreatePayRunDto, userId?: string) {
@@ -89,21 +151,28 @@ export class PayrollService {
     let totalGross = 0;
     let totalTax = 0;
     let totalNi = 0;
+    let totalPensionEmployee = 0;
+    let totalPensionEmployer = 0;
     let totalNet = 0;
 
     if (activeTimesheets.length > 0) {
       for (const ts of activeTimesheets) {
+        const emp = await this.db.findEmployeeById(companyId, ts.employeeId);
+        const taxCode = (emp as any)?.taxCode || '1257L';
+
         const gross = ts.grossPay;
         const regularHours = ts.regularHours;
         const overtimeHours = ts.overtimeHours;
         const regularPay = Math.round(regularHours * (ts.totalHours > 0 ? gross / ts.totalHours : 15.0) * 100) / 100;
         const overtimePay = Math.round((gross - regularPay) * 100) / 100;
 
-        const { taxDeduction, nationalInsurance, netPay } = calculateUKDeductions(gross, dto.frequency);
+        const { taxDeduction, nationalInsurance, pensionEmployee, pensionEmployer, netPay } = calculateUKDeductions(gross, dto.frequency, taxCode);
 
         totalGross += gross;
         totalTax += taxDeduction;
         totalNi += nationalInsurance;
+        totalPensionEmployee += pensionEmployee;
+        totalPensionEmployer += pensionEmployer;
         totalNet += netPay;
 
         payslipsToCreate.push({
@@ -118,8 +187,11 @@ export class PayrollService {
           regularPay,
           overtimePay,
           grossPay: gross,
+          taxCode,
           taxDeduction,
           nationalInsurance,
+          pensionEmployee,
+          pensionEmployer,
           otherDeductions: 0,
           netPay,
           currency: ts.currency || 'GBP',
@@ -135,12 +207,15 @@ export class PayrollService {
         const overtimeHours = 0.0;
         const regularPay = 2400.0;
         const overtimePay = 0.0;
+        const taxCode = (emp as any)?.taxCode || '1257L';
 
-        const { taxDeduction, nationalInsurance, netPay } = calculateUKDeductions(gross, dto.frequency);
+        const { taxDeduction, nationalInsurance, pensionEmployee, pensionEmployer, netPay } = calculateUKDeductions(gross, dto.frequency, taxCode);
 
         totalGross += gross;
         totalTax += taxDeduction;
         totalNi += nationalInsurance;
+        totalPensionEmployee += pensionEmployee;
+        totalPensionEmployer += pensionEmployer;
         totalNet += netPay;
 
         payslipsToCreate.push({
@@ -154,8 +229,11 @@ export class PayrollService {
           regularPay,
           overtimePay,
           grossPay: gross,
+          taxCode,
           taxDeduction,
           nationalInsurance,
+          pensionEmployee,
+          pensionEmployer,
           otherDeductions: 0,
           netPay,
           currency: 'GBP',
@@ -177,9 +255,12 @@ export class PayrollService {
       totalGross: Math.round(totalGross * 100) / 100,
       totalTax: Math.round(totalTax * 100) / 100,
       totalNi: Math.round(totalNi * 100) / 100,
+      totalPensionEmployee: Math.round(totalPensionEmployee * 100) / 100,
+      totalPensionEmployer: Math.round(totalPensionEmployer * 100) / 100,
       totalNet: Math.round(totalNet * 100) / 100,
       totalEmployees: payslipsToCreate.length,
       currency: 'GBP',
+      createdBy: userId,
       notes: dto.notes,
     });
 
@@ -380,6 +461,7 @@ export class PayrollService {
       'Employee Number',
       'First Name',
       'Last Name',
+      'Tax Code',
       'Period Start',
       'Period End',
       'Payment Date',
@@ -388,6 +470,8 @@ export class PayrollService {
       'Gross Pay (£)',
       'Tax Deduction (£)',
       'National Insurance (£)',
+      'Pension Employee (£)',
+      'Pension Employer (£)',
       'Net Pay (£)',
       'Status',
     ];
@@ -396,6 +480,7 @@ export class PayrollService {
       `"${ps.employee?.employeeNumber || 'N/A'}"`,
       `"${ps.employee?.firstName || ''}"`,
       `"${ps.employee?.lastName || ''}"`,
+      `"${ps.taxCode || '1257L'}"`,
       ps.periodStart,
       ps.periodEnd,
       ps.paymentDate,
@@ -404,6 +489,8 @@ export class PayrollService {
       ps.grossPay.toFixed(2),
       ps.taxDeduction.toFixed(2),
       ps.nationalInsurance.toFixed(2),
+      (ps.pensionEmployee || 0).toFixed(2),
+      (ps.pensionEmployer || 0).toFixed(2),
       ps.netPay.toFixed(2),
       `"${ps.status}"`,
     ]);

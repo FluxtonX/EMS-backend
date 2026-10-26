@@ -111,6 +111,17 @@ export class ClientsController {
     return this.clientsService.findAllContracts(companyId, { clientId, siteId, status });
   }
 
+  @Get('contracts/:id/unbilled-hours')
+  @RequirePermissions(Permission.CONTRACT_VIEW)
+  async getContractUnbilledHours(
+    @TenantId() companyId: string,
+    @Param('id') id: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
+  ) {
+    return this.clientsService.getContractUnbilledHours(companyId, id, startDate, endDate);
+  }
+
   @Patch('contracts/:id')
   @RequirePermissions(Permission.CONTRACT_MANAGE)
   async updateContract(

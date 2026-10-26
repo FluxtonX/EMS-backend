@@ -5,13 +5,29 @@ export class CreateClientDto {
   @IsNotEmpty()
   name: string;
 
+  @IsOptional()
   @IsEmail()
-  @IsNotEmpty()
-  billingEmail: string;
+  billingEmail?: string;
+
+  @IsOptional()
+  @IsEmail()
+  contactEmail?: string;
 
   @IsOptional()
   @IsString()
   companyNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  contactName?: string;
+
+  @IsOptional()
+  @IsString()
+  contactPhone?: string;
 
   @IsOptional()
   @IsString()
@@ -26,6 +42,10 @@ export class CreateClientDto {
   address?: string;
 
   @IsOptional()
+  @IsString()
+  billingAddress?: string;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   paymentTermsDays?: number = 30;
@@ -34,3 +54,4 @@ export class CreateClientDto {
   @IsString()
   notes?: string;
 }
+

@@ -50,6 +50,6 @@ export class ReportsController {
       return new StreamableFile(buffer);
     }
 
-    return { data: report };
+    return report;
   }
 }

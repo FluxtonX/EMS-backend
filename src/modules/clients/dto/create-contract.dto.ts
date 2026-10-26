@@ -5,17 +5,25 @@ export class CreateContractDto {
   @IsNotEmpty()
   clientId: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  siteId: string;
+  siteId?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  title: string;
+  title?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  contractNumber: string;
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  contractNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  code?: string;
 
   @IsDateString()
   @IsNotEmpty()
@@ -29,11 +37,18 @@ export class CreateContractDto {
   @IsIn(['weekly', 'bi_weekly', 'monthly'])
   billingCycle?: 'weekly' | 'bi_weekly' | 'monthly' = 'monthly';
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  hourlyBillingRate: number;
+  hourlyBillingRate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  billingRatePerHour?: number;
 
   @IsOptional()
   @IsString()
   notes?: string;
 }
+

@@ -3,6 +3,7 @@ import { MeService } from './me.service';
 import { DatabaseService } from '../../database/database.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { LeaveService } from '../leave/leave.service';
+import { LicencesService } from '../licences/licences.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
 describe('MeService', () => {
@@ -22,6 +23,7 @@ describe('MeService', () => {
         DatabaseService,
         AttendanceService,
         LeaveService,
+        LicencesService,
       ],
     }).compile();
 

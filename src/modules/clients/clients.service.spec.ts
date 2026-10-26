@@ -67,6 +67,21 @@ describe('ClientsService', () => {
                 status: 'active',
               },
             ]),
+            findContractById: jest.fn().mockImplementation((cId, id) => {
+              if (id === 'con-1') {
+                return Promise.resolve({
+                  id: 'con-1',
+                  clientId: 'cli-1',
+                  siteId: 'site-1',
+                  title: 'Main Tower Security',
+                  contractNumber: 'CNT-001',
+                  hourlyBillingRate: 28.5,
+                });
+              }
+              return Promise.resolve(null);
+            }),
+            findAttendanceRecords: jest.fn().mockResolvedValue([]),
+            findShifts: jest.fn().mockResolvedValue([]),
             createInvoice: jest.fn().mockImplementation((data) =>
               Promise.resolve({
                 id: 'inv-1',
@@ -220,6 +235,23 @@ describe('ClientsService', () => {
       expect(summary.totalLaborCost).toBe(3500.0);
       expect(summary.grossProfit).toBe(1500.0);
       expect(summary.marginPercentage).toBe(30.0);
+    });
+  });
+
+  describe('getContractUnbilledHours', () => {
+    it('should aggregate contract hours and calculate subtotal', async () => {
+      const result = await service.getContractUnbilledHours(mockCompanyId, 'con-1');
+      expect(result.contractId).toBe('con-1');
+      expect(result.hourlyBillingRate).toBe(28.5);
+      expect(result.totalHours).toBeGreaterThan(0);
+      expect(result.calculatedSubtotal).toBe(Math.round(result.totalHours * 28.5 * 100) / 100);
+      expect(result.suggestedLineItems).toHaveLength(1);
+    });
+
+    it('should throw NotFoundException if contract does not exist', async () => {
+      await expect(
+        service.getContractUnbilledHours(mockCompanyId, 'non-existent-contract')
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

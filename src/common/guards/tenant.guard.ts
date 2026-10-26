@@ -33,6 +33,8 @@ export class TenantGuard implements CanActivate {
     // Attach companyId to request context
     request.companyId = user.companyId;
 
+    console.log(`[TenantGuard] ${request.method} ${request.url} | User: ${user?.email} | Role: ${user?.role} | CompanyId: ${user?.companyId}`);
+
     return true;
   }
 }

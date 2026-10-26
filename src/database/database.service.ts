@@ -384,9 +384,12 @@ export interface PayRunEntity {
   totalGross: number;
   totalTax: number;
   totalNi: number;
+  totalPensionEmployee?: number;
+  totalPensionEmployer?: number;
   totalNet: number;
   totalEmployees: number;
   currency: string;
+  createdBy?: string;
   approvedBy?: string;
   approvedAt?: Date;
   paidAt?: Date;
@@ -409,8 +412,11 @@ export interface PayslipEntity {
   regularPay: number;
   overtimePay: number;
   grossPay: number;
+  taxCode?: string;
   taxDeduction: number;
   nationalInsurance: number;
+  pensionEmployee?: number;
+  pensionEmployer?: number;
   otherDeductions: number;
   netPay: number;
   currency: string;
@@ -3635,27 +3641,51 @@ export class DatabaseService implements OnModuleInit {
 
         if (filters.employeeId) query = query.eq('employee_id', filters.employeeId);
         if (filters.siteId && filters.siteId !== 'all') query = query.eq('site_id', filters.siteId);
-        if (filters.status && filters.status !== 'all') query = query.eq('status', filters.status);
         if (filters.varianceFlag && filters.varianceFlag !== 'all') query = query.eq('variance_flag', filters.varianceFlag);
+        if (filters.status && filters.status !== 'all') {
+          query = query.eq('status', filters.status);
+          if (filters.startDate) query = query.gte('clock_in_time', `${filters.startDate}T00:00:00.000Z`);
+          if (filters.endDate) query = query.lte('clock_in_time', `${filters.endDate}T23:59:59.999Z`);
+        } else if (filters.startDate && filters.endDate) {
+          // If searching for a date, always include any currently on-duty officers so active shifts are never hidden
+          query = query.or(`and(clock_in_time.gte.${filters.startDate}T00:00:00.000Z,clock_in_time.lte.${filters.endDate}T23:59:59.999Z),status.eq.clocked_in,status.eq.on_break`);
+        } else if (filters.startDate) {
+          query = query.or(`clock_in_time.gte.${filters.startDate}T00:00:00.000Z,status.eq.clocked_in,status.eq.on_break`);
+        } else if (filters.endDate) {
+          query = query.or(`clock_in_time.lte.${filters.endDate}T23:59:59.999Z,status.eq.clocked_in,status.eq.on_break`);
+        }
 
         const { data, error } = await query;
         if (!error && data) {
           for (const row of data) {
             const record = this.mapAttendance(row);
-            if (row.employees && row.sites) {
-              const employee = this.mapEmployee(row.employees);
-              const site = this.mapSite(row.sites);
-              let shift: ShiftEntity | undefined = undefined;
-              if (row.shifts) {
-                shift = this.mapShift(row.shifts);
-              }
-              results.push({
-                ...record,
-                employee,
-                site,
-                shift,
-              });
+            const employee = row.employees
+              ? this.mapEmployee(row.employees)
+              : await this.findEmployeeById(companyId, record.employeeId);
+            const site = row.sites
+              ? this.mapSite(row.sites)
+              : record.siteId
+              ? await this.findSiteById(companyId, record.siteId)
+              : null;
+            let shift: ShiftEntity | undefined = undefined;
+            if (row.shifts) {
+              shift = this.mapShift(row.shifts);
             }
+            results.push({
+              ...record,
+              employee: employee || ({
+                id: record.employeeId,
+                firstName: 'Security',
+                lastName: 'Officer',
+                employeeNumber: 'SEC-OFFICER',
+              } as any),
+              site: site || ({
+                id: record.siteId || 'unassigned',
+                name: 'Site Duty',
+                code: 'SITE',
+              } as any),
+              shift,
+            });
           }
           return results.sort((a, b) => b.clockInTime.getTime() - a.clockInTime.getTime());
         }
@@ -3672,25 +3702,37 @@ export class DatabaseService implements OnModuleInit {
       if (filters.varianceFlag && filters.varianceFlag !== 'all' && record.varianceFlag !== filters.varianceFlag) continue;
 
       const clockInDateStr = record.clockInTime.toISOString().split('T')[0];
-      if (filters.startDate && clockInDateStr < filters.startDate) continue;
-      if (filters.endDate && clockInDateStr > filters.endDate) continue;
+      const isActive = record.status === 'clocked_in' || record.status === 'on_break';
+      const shouldIncludeActive = !filters.status || filters.status === 'all';
+
+      if (!isActive || !shouldIncludeActive) {
+        if (filters.startDate && clockInDateStr < filters.startDate) continue;
+        if (filters.endDate && clockInDateStr > filters.endDate) continue;
+      }
 
       const employee = await this.findEmployeeById(companyId, record.employeeId);
-      const site = await this.findSiteById(companyId, record.siteId);
-      if (employee && site) {
-        let shift: ShiftEntity | undefined = undefined;
-        if (record.shiftId) {
-          const s = await this.findShiftById(companyId, record.shiftId);
-          if (s) shift = s;
-        }
-
-        results.push({
-          ...record,
-          employee,
-          site,
-          shift,
-        });
+      const site = record.siteId ? await this.findSiteById(companyId, record.siteId) : null;
+      let shift: ShiftEntity | undefined = undefined;
+      if (record.shiftId) {
+        const s = await this.findShiftById(companyId, record.shiftId);
+        if (s) shift = s;
       }
+
+      results.push({
+        ...record,
+        employee: employee || ({
+          id: record.employeeId,
+          firstName: 'Security',
+          lastName: 'Officer',
+          employeeNumber: 'SEC-OFFICER',
+        } as any),
+        site: site || ({
+          id: record.siteId || 'unassigned',
+          name: 'Site Duty',
+          code: 'SITE',
+        } as any),
+        shift,
+      });
     }
 
     return results.sort((a, b) => b.clockInTime.getTime() - a.clockInTime.getTime());
@@ -5101,6 +5143,214 @@ export class DatabaseService implements OnModuleInit {
     return entity;
   }
 
+  private seedSampleClients(companyId: string) {
+    const now = new Date();
+    const siteIds = Array.from(this.sites.values()).map((s) => s.id);
+    const defaultSiteId = siteIds[0] || randomUUID();
+
+    const client1: ClientEntity = {
+      id: 'cli-sample-1',
+      companyId,
+      name: 'Canary Wharf Financial Towers Ltd',
+      companyNumber: 'CWFT',
+      vatNumber: 'GB 992 4810 44',
+      billingEmail: 'accounts@cwft-london.co.uk',
+      phone: '+44 20 7946 0912',
+      address: '1 Canada Square, Canary Wharf, London E14 5AA',
+      status: 'active',
+      paymentTermsDays: 30,
+      currency: 'GBP',
+      notes: 'Premier Tier-1 financial headquarters security contract.',
+      createdAt: new Date(now.getTime() - 60 * 86400000),
+      updatedAt: now,
+    };
+
+    const client2: ClientEntity = {
+      id: 'cli-sample-2',
+      companyId,
+      name: 'Westfield Stratford Logistics Hub',
+      companyNumber: 'WSLH',
+      vatNumber: 'GB 773 2190 88',
+      billingEmail: 'billing@westfield-logistics.co.uk',
+      phone: '+44 20 8912 3341',
+      address: 'Montfichet Rd, Olympic Park, London E20 1EJ',
+      status: 'active',
+      paymentTermsDays: 14,
+      currency: 'GBP',
+      notes: 'Distribution and loading dock manned guarding contract.',
+      createdAt: new Date(now.getTime() - 45 * 86400000),
+      updatedAt: now,
+    };
+
+    const client3: ClientEntity = {
+      id: 'cli-sample-3',
+      companyId,
+      name: 'St Bartholomew Hospital NHS Trust',
+      companyNumber: 'SBHT',
+      vatNumber: 'GB 654 3210 11',
+      billingEmail: 'procurement@bartshealth.nhs.uk',
+      phone: '+44 20 7377 7000',
+      address: 'West Smithfield, City of London EC1A 7BE',
+      status: 'active',
+      paymentTermsDays: 30,
+      currency: 'GBP',
+      notes: 'Emergency department and clinical perimeter 24/7 SIA presence.',
+      createdAt: new Date(now.getTime() - 30 * 86400000),
+      updatedAt: now,
+    };
+
+    this.clients.set(client1.id, client1);
+    this.clients.set(client2.id, client2);
+    this.clients.set(client3.id, client3);
+
+    const contract1: ContractEntity = {
+      id: 'con-sample-1',
+      companyId,
+      clientId: client1.id,
+      siteId: siteIds[0] || defaultSiteId,
+      contractNumber: 'CWFT-2026-MG1',
+      title: 'Canary Wharf 24/7 SIA Manned Guarding & Access Control',
+      startDate: new Date(now.getTime() - 60 * 86400000).toISOString().split('T')[0],
+      endDate: undefined,
+      billingCycle: 'monthly',
+      hourlyBillingRate: 26.50,
+      status: 'active',
+      notes: 'SIA Door Supervisors & Control Room CCTV Operators.',
+      createdAt: new Date(now.getTime() - 60 * 86400000),
+      updatedAt: now,
+    };
+
+    const contract2: ContractEntity = {
+      id: 'con-sample-2',
+      companyId,
+      clientId: client2.id,
+      siteId: siteIds[1] || defaultSiteId,
+      contractNumber: 'WSLH-2026-LB',
+      title: 'Westfield Logistics Loading Bay Security',
+      startDate: new Date(now.getTime() - 45 * 86400000).toISOString().split('T')[0],
+      endDate: undefined,
+      billingCycle: 'weekly',
+      hourlyBillingRate: 23.50,
+      status: 'active',
+      notes: 'HGV intake inspection and static perimeter guarding.',
+      createdAt: new Date(now.getTime() - 45 * 86400000),
+      updatedAt: now,
+    };
+
+    const contract3: ContractEntity = {
+      id: 'con-sample-3',
+      companyId,
+      clientId: client3.id,
+      siteId: siteIds[2] || defaultSiteId,
+      contractNumber: 'SBHT-2026-ED',
+      title: 'NHS Hospital Critical Security Coverage',
+      startDate: new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0],
+      endDate: undefined,
+      billingCycle: 'monthly',
+      hourlyBillingRate: 25.00,
+      status: 'active',
+      notes: 'Emergency department triage protection and fast response.',
+      createdAt: new Date(now.getTime() - 30 * 86400000),
+      updatedAt: now,
+    };
+
+    this.contracts.set(contract1.id, contract1);
+    this.contracts.set(contract2.id, contract2);
+    this.contracts.set(contract3.id, contract3);
+
+    const invoice1: InvoiceEntity = {
+      id: 'inv-sample-1',
+      companyId,
+      clientId: client1.id,
+      contractId: contract1.id,
+      invoiceNumber: 'INV-2026-0001',
+      issueDate: new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0],
+      dueDate: new Date(now.getTime()).toISOString().split('T')[0],
+      subtotal: 8480.00,
+      taxRate: 20.0,
+      taxAmount: 1696.00,
+      totalAmount: 10176.00,
+      currency: 'GBP',
+      status: 'paid',
+      paidAt: new Date(now.getTime() - 5 * 86400000),
+      notes: 'Monthly coverage: 320 SIA officer hours @ £26.50/hr',
+      createdAt: new Date(now.getTime() - 30 * 86400000),
+      updatedAt: now,
+    };
+
+    const invoice2: InvoiceEntity = {
+      id: 'inv-sample-2',
+      companyId,
+      clientId: client2.id,
+      contractId: contract2.id,
+      invoiceNumber: 'INV-2026-0002',
+      issueDate: new Date(now.getTime() - 14 * 86400000).toISOString().split('T')[0],
+      dueDate: new Date(now.getTime() + 16 * 86400000).toISOString().split('T')[0],
+      subtotal: 3760.00,
+      taxRate: 20.0,
+      taxAmount: 752.00,
+      totalAmount: 4512.00,
+      currency: 'GBP',
+      status: 'sent',
+      notes: 'Fortnightly logistics gate security coverage (160 hrs @ £23.50/hr)',
+      createdAt: new Date(now.getTime() - 14 * 86400000),
+      updatedAt: now,
+    };
+
+    const invoice3: InvoiceEntity = {
+      id: 'inv-sample-3',
+      companyId,
+      clientId: client3.id,
+      contractId: contract3.id,
+      invoiceNumber: 'INV-2026-0003',
+      issueDate: new Date(now.getTime() - 3 * 86400000).toISOString().split('T')[0],
+      dueDate: new Date(now.getTime() + 27 * 86400000).toISOString().split('T')[0],
+      subtotal: 6000.00,
+      taxRate: 20.0,
+      taxAmount: 1200.00,
+      totalAmount: 7200.00,
+      currency: 'GBP',
+      status: 'draft',
+      notes: 'Draft hospital security provision (240 hrs @ £25.00/hr)',
+      createdAt: new Date(now.getTime() - 3 * 86400000),
+      updatedAt: now,
+    };
+
+    this.invoices.set(invoice1.id, invoice1);
+    this.invoices.set(invoice2.id, invoice2);
+    this.invoices.set(invoice3.id, invoice3);
+
+    this.invoiceItems.set('item-sample-1', {
+      id: 'item-sample-1',
+      invoiceId: invoice1.id,
+      description: 'SIA Door Supervision & Security Patrols (320 hrs)',
+      hours: 320,
+      rate: 26.50,
+      totalAmount: 8480.00,
+      createdAt: now,
+    });
+
+    this.invoiceItems.set('item-sample-2', {
+      id: 'item-sample-2',
+      invoiceId: invoice2.id,
+      description: 'Loading Bay Gate Officer Staffing (160 hrs)',
+      hours: 160,
+      rate: 23.50,
+      totalAmount: 3760.00,
+      createdAt: now,
+    });
+
+    this.invoiceItems.set('item-sample-3', {
+      id: 'item-sample-3',
+      invoiceId: invoice3.id,
+      description: 'Emergency Department 24/7 Security Presence (240 hrs)',
+      hours: 240,
+      rate: 25.00,
+      totalAmount: 6000.00,
+      createdAt: now,
+    });
+  }
+
   async findClients(
     companyId: string,
     filters: { status?: string; search?: string } = {}
@@ -5118,6 +5368,10 @@ export class DatabaseService implements OnModuleInit {
       }
     }
 
+    if (this.clients.size === 0) {
+      this.seedSampleClients(companyId);
+    }
+
     let list = Array.from(this.clients.values()).filter((c) => c.companyId === companyId);
     if (filters.status && filters.status !== 'all') list = list.filter((c) => c.status === filters.status);
     if (filters.search) {
@@ -5127,6 +5381,7 @@ export class DatabaseService implements OnModuleInit {
 
     return list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
+
 
   async findClientById(companyId: string, id: string): Promise<ClientEntity | null> {
     if (this.supabase) {
