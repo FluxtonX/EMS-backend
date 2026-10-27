@@ -19,6 +19,7 @@ import { ReconcileAttendanceDto } from './dto/reconcile-attendance.dto';
 import { QueryAttendanceDto } from './dto/query-attendance.dto';
 import { calculateWorkingDays } from '../leave/leave.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TimesheetsService } from '../timesheets/timesheets.service';
 
 export function calculateDistanceMeters(
   lat1: number,
@@ -45,7 +46,8 @@ export class AttendanceService {
 
   constructor(
     private readonly databaseService: DatabaseService,
-    @Optional() private readonly notificationsService?: NotificationsService
+    @Optional() private readonly notificationsService?: NotificationsService,
+    @Optional() private readonly timesheetsService?: TimesheetsService
   ) {}
 
   async clockIn(companyId: string, dto: ClockInDto, userId?: string) {
@@ -423,6 +425,19 @@ export class AttendanceService {
       },
     });
 
+    // Auto-sync employee's pay-period timesheet so completed hours immediately populate
+    if (this.timesheetsService) {
+      try {
+        await this.timesheetsService.syncEmployeeTimesheetForPeriod(
+          companyId,
+          record.employeeId,
+          record.clockInTime || now
+        );
+      } catch (syncErr: any) {
+        this.logger.warn(`Failed to auto-sync timesheet on clock-out: ${syncErr.message}`);
+      }
+    }
+
     return this.findById(companyId, id);
   }
 
@@ -472,6 +487,19 @@ export class AttendanceService {
       },
     });
 
+    // Auto-sync employee's pay-period timesheet on reconciliation
+    if (this.timesheetsService) {
+      try {
+        await this.timesheetsService.syncEmployeeTimesheetForPeriod(
+          companyId,
+          record.employeeId,
+          record.clockInTime || new Date()
+        );
+      } catch (syncErr: any) {
+        this.logger.warn(`Failed to auto-sync timesheet on reconcile: ${syncErr.message}`);
+      }
+    }
+
     return this.findById(companyId, id);
   }
 
@@ -498,6 +526,191 @@ export class AttendanceService {
       employee,
       site,
       shift,
+    };
+  }
+
+  /**
+   * Generates a comprehensive Daily Attendance Register for a given date.
+   * Cross-references:
+   * 1. Active Employees
+   * 2. Scheduled Shifts
+   * 3. Clock-in / Clock-out Attendance Records
+   * 4. Approved Leaves
+   * Outputs full roster: Present, On Duty (live), Absent (no check-in), Leave, or Off.
+   */
+  async getDailySheet(
+    companyId: string,
+    query: { date?: string; siteId?: string }
+  ) {
+    const targetDate = query.date || new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0];
+    const isPastOrToday = targetDate <= todayStr;
+
+    // 1. Fetch all company employees
+    const employeesResult = await this.databaseService.findEmployees(companyId, {
+      status: 'all',
+      limit: 200,
+    });
+    const employees = employeesResult.items || [];
+
+    // 2. Fetch attendance records for this date (including overnight & active)
+    const attendanceRecords = await this.databaseService.findAttendanceRecords(companyId, {
+      startDate: targetDate,
+      endDate: targetDate,
+      siteId: query.siteId && query.siteId !== 'all' ? query.siteId : undefined,
+    });
+
+    // 3. Fetch scheduled shifts for this date
+    let shifts: ShiftEntity[] = [];
+    try {
+      shifts = await this.databaseService.findShifts(companyId, {
+        startDate: targetDate,
+        endDate: targetDate,
+      });
+    } catch {
+      // Shift lookup fallback
+    }
+
+    // 4. Fetch approved leaves covering targetDate
+    let leaves: any[] = [];
+    try {
+      const leavesResult = await this.databaseService.findLeaveRequests(companyId, {
+        status: 'approved',
+      });
+      leaves = (leavesResult || []).filter(
+        (l: any) => l.startDate <= targetDate && l.endDate >= targetDate
+      );
+    } catch {
+      // Leave lookup fallback
+    }
+
+    // 5. Match each employee into the daily register
+    const items = await Promise.all(
+      employees.map(async (emp) => {
+        // Attendance records on or touching targetDate
+        const empAtts = (attendanceRecords || []).filter((a) => a.employeeId === emp.id);
+        const att =
+          empAtts.find((a) => a.status === 'clocked_in' || a.status === 'on_break') ||
+          empAtts.find((a) => {
+            const outDate = a.clockOutTime ? new Date(a.clockOutTime).toISOString().split('T')[0] : '';
+            const inDate = a.clockInTime ? new Date(a.clockInTime).toISOString().split('T')[0] : '';
+            return outDate === targetDate || inDate === targetDate;
+          }) ||
+          empAtts[0];
+
+        // Shift assigned to this employee
+        const shift = (shifts || []).find(
+          (s) => s.employeeId === emp.id && (!query.siteId || query.siteId === 'all' || s.siteId === query.siteId)
+        );
+
+        // Active assignment (for default site)
+        const assignment = await this.databaseService.findActiveAssignmentByEmployeeId(companyId, emp.id);
+        const defaultSite = assignment?.siteJob?.siteId
+          ? await this.databaseService.findSiteById(companyId, assignment.siteJob.siteId)
+          : null;
+
+        // Leave covering this date
+        const leave = leaves.find((l) => l.employeeId === emp.id);
+
+        // Determine status
+        let status: 'present' | 'on_duty' | 'absent' | 'leave' | 'scheduled' | 'off' = 'off';
+        let totalHours = 0;
+        let clockInTime: Date | null = null;
+        let clockOutTime: Date | null = null;
+        let breakMinutes = 0;
+        let varianceFlag: VarianceFlag = 'none';
+        let site = (att as any)?.site || (shift as any)?.site || defaultSite || null;
+
+        if (att) {
+          clockInTime = att.clockInTime;
+          clockOutTime = att.clockOutTime || null;
+          breakMinutes = att.breakMinutes || 0;
+          varianceFlag = att.varianceFlag || 'none';
+
+          if (att.status === 'clocked_in' || att.status === 'on_break') {
+            status = 'on_duty';
+            const now = Date.now();
+            const gross = Math.max(0, (now - new Date(att.clockInTime).getTime()) / 3600000);
+            totalHours = Math.max(0, Math.round((gross - breakMinutes / 60) * 100) / 100);
+          } else {
+            status = 'present';
+            totalHours = Number(att.totalHours) || 0;
+          }
+        } else if (leave) {
+          status = 'leave';
+        } else if (shift) {
+          // Scheduled but no attendance record
+          status = isPastOrToday ? 'absent' : 'scheduled';
+        } else {
+          // If active employee on a weekday and date is past or today, mark as absent if they didn't check in
+          const dayOfWeek = new Date(targetDate).getDay();
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          if (isPastOrToday && !isWeekend) {
+            status = 'absent';
+          } else {
+            status = 'off';
+          }
+        }
+
+        // Daily overtime calculation: hours > 8.0
+        const regularHours = Math.min(totalHours, 8.0);
+        const overtimeHours = Math.max(0, Math.round((totalHours - 8.0) * 100) / 100);
+
+        return {
+          employeeId: emp.id,
+          employee: {
+            id: emp.id,
+            employeeNumber: emp.employeeNumber,
+            firstName: emp.firstName,
+            lastName: emp.lastName,
+            email: emp.email,
+            phone: emp.phone,
+          },
+          site: site ? { id: site.id, name: site.name, code: site.code } : null,
+          shift: shift
+            ? {
+                id: shift.id,
+                startTime: shift.startTime,
+                endTime: shift.endTime,
+                status: shift.status,
+              }
+            : null,
+          status,
+          clockInTime,
+          clockOutTime,
+          breakMinutes,
+          totalHours,
+          regularHours,
+          overtimeHours,
+          varianceFlag,
+          leaveReason: leave?.reason || null,
+          attendanceRecordId: att?.id || null,
+        };
+      })
+    );
+
+    // Apply site filter if requested
+    const filteredItems = query.siteId && query.siteId !== 'all'
+      ? items.filter((item) => item.site?.id === query.siteId)
+      : items;
+
+    const presentCount = filteredItems.filter((i) => i.status === 'present').length;
+    const onDutyCount = filteredItems.filter((i) => i.status === 'on_duty').length;
+    const absentCount = filteredItems.filter((i) => i.status === 'absent').length;
+    const onLeaveCount = filteredItems.filter((i) => i.status === 'leave').length;
+    const offCount = filteredItems.filter((i) => i.status === 'off' || i.status === 'scheduled').length;
+
+    return {
+      date: targetDate,
+      summary: {
+        totalEmployees: filteredItems.length,
+        presentCount,
+        onDutyCount,
+        absentCount,
+        onLeaveCount,
+        offCount,
+      },
+      items: filteredItems,
     };
   }
 }

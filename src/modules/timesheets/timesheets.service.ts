@@ -15,7 +15,8 @@ import { QueryTimesheetsDto } from './dto/query-timesheets.dto';
 import { AdjustTimesheetEntryDto } from './dto/adjust-timesheet-entry.dto';
 import { ReviewTimesheetDto } from './dto/review-timesheet.dto';
 
-const STANDARD_WEEKLY_REGULAR_HOURS_LIMIT = 40.0;
+const STANDARD_DAILY_REGULAR_HOURS_LIMIT = 8.0;  // Any hours over 8 hrs in one day count as overtime
+const STANDARD_WEEKLY_REGULAR_HOURS_LIMIT = 40.0; // Any regular hours over 40 hrs in a week count as overtime
 const DEFAULT_FALLBACK_PAY_RATE = 14.5; // Standard UK security officer baseline rate
 
 @Injectable()
@@ -63,7 +64,10 @@ export class TimesheetsService {
         : (allAttendance as any)?.items || [];
 
       const eligibleRecords = rawAttendanceList.filter(
-        (a: any) => a.clockOutTime && (a.status === 'clocked_out' || a.status === 'reconciled')
+        (a: any) =>
+          (a.clockOutTime && (a.status === 'clocked_out' || a.status === 'reconciled')) ||
+          a.status === 'clocked_in' ||
+          a.status === 'on_break'
       );
 
       // Fetch employee assignments to snapshot immutable pay rates
@@ -126,31 +130,34 @@ export class TimesheetsService {
 
       for (const att of recordsToProcess) {
         const clockIn = new Date(att.clockInTime);
-        const clockOut = new Date(att.clockOutTime!);
+        const clockOut = att.clockOutTime ? new Date(att.clockOutTime) : new Date();
         const grossDurationHours = Math.max(0, (clockOut.getTime() - clockIn.getTime()) / (1000 * 60 * 60));
-        const breakMins = att.breakMinutes || 0;
+        let breakMins = att.breakMinutes || 0;
+        if (att.status === 'on_break' && att.breakStartTime) {
+          breakMins += Math.round((clockOut.getTime() - new Date(att.breakStartTime).getTime()) / 60000);
+        }
         const breakHours = breakMins / 60;
         const netDurationHours = Math.max(0, grossDurationHours - breakHours);
 
         totalBreakMinutes += breakMins;
-        const previousCumulative = cumulativeHours;
         cumulativeHours += netDurationHours;
 
-        let isOvertime = false;
-        let regularPortion = netDurationHours;
-        let overtimePortion = 0;
+        // Daily overtime: any shift hours over 8.0 hrs in a single day count as overtime
+        const dailyRegular = Math.min(netDurationHours, STANDARD_DAILY_REGULAR_HOURS_LIMIT);
+        const dailyOvertime = Math.max(0, netDurationHours - STANDARD_DAILY_REGULAR_HOURS_LIMIT);
 
-        if (cumulativeHours > STANDARD_WEEKLY_REGULAR_HOURS_LIMIT) {
-          isOvertime = true;
-          if (previousCumulative < STANDARD_WEEKLY_REGULAR_HOURS_LIMIT) {
-            regularPortion = STANDARD_WEEKLY_REGULAR_HOURS_LIMIT - previousCumulative;
-            overtimePortion = netDurationHours - regularPortion;
-          } else {
-            regularPortion = 0;
-            overtimePortion = netDurationHours;
-          }
+        let regularPortion = dailyRegular;
+        let overtimePortion = dailyOvertime;
+
+        // Weekly overtime: regular hours cannot exceed 40.0 hours in a week
+        if (totalRegularHours + regularPortion > STANDARD_WEEKLY_REGULAR_HOURS_LIMIT) {
+          const allowedRegular = Math.max(0, STANDARD_WEEKLY_REGULAR_HOURS_LIMIT - totalRegularHours);
+          const weeklySpillover = regularPortion - allowedRegular;
+          regularPortion = allowedRegular;
+          overtimePortion += weeklySpillover;
         }
 
+        const isOvertime = overtimePortion > 0;
         totalRegularHours += regularPortion;
         totalOvertimeHours += overtimePortion;
 
@@ -214,17 +221,69 @@ export class TimesheetsService {
         });
       }
 
+      // Upsert line entries if re-generating for an existing timesheet
+      const existingEntries = await this.db.findTimesheetEntries(timesheet.id);
+
       for (const entry of entriesToCreate) {
-        await this.db.createTimesheetEntry({
-          ...entry,
-          timesheetId: timesheet.id,
-        });
+        const existingEntry = (existingEntries || []).find(
+          (e) => e.attendanceRecordId && e.attendanceRecordId === entry.attendanceRecordId
+        );
+        if (existingEntry) {
+          await this.db.updateTimesheetEntry(companyId, existingEntry.id, {
+            netHours: entry.netHours,
+            totalPay: entry.totalPay,
+            isOvertime: entry.isOvertime,
+          });
+        } else {
+          await this.db.createTimesheetEntry({
+            ...entry,
+            timesheetId: timesheet.id,
+          });
+        }
       }
 
       generatedTimesheets.push(timesheet);
     }
 
     return { generated: generatedTimesheets.length, timesheets: generatedTimesheets };
+  }
+
+  /**
+   * Automatically synchronizes or updates the current weekly timesheet for an employee.
+   * Period: Monday to Sunday of the week containing `targetDate` (defaults to now).
+   */
+  async syncEmployeeTimesheetForPeriod(
+    companyId: string,
+    employeeId: string,
+    targetDate: Date = new Date()
+  ): Promise<TimesheetEntity | null> {
+    try {
+      const d = new Date(targetDate);
+      const day = d.getDay();
+      // Monday is start of standard UK work week (day 1). If Sunday (day 0), diff is -6.
+      const diffToMonday = d.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(d);
+      monday.setDate(diffToMonday);
+      monday.setHours(0, 0, 0, 0);
+
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      sunday.setHours(23, 59, 59, 999);
+
+      const periodStart = monday.toISOString().split('T')[0];
+      const periodEnd = sunday.toISOString().split('T')[0];
+
+      const result = await this.generateTimesheets(companyId, {
+        periodStart,
+        periodEnd,
+        employeeId,
+      });
+
+      return result.timesheets[0] || null;
+    } catch (err: any) {
+      this.logger.error(`Error syncing timesheet for employee ${employeeId}: ${err.message}`);
+      return null;
+    }
   }
 
   /**

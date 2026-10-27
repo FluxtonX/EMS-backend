@@ -5,9 +5,10 @@ import { DatabaseModule } from '../../database/database.module';
 import { AttendanceModule } from '../attendance/attendance.module';
 import { LeaveModule } from '../leave/leave.module';
 import { LicencesModule } from '../licences/licences.module';
+import { TimesheetsModule } from '../timesheets/timesheets.module';
 
 @Module({
-  imports: [DatabaseModule, AttendanceModule, LeaveModule, LicencesModule],
+  imports: [DatabaseModule, AttendanceModule, LeaveModule, LicencesModule, TimesheetsModule],
   controllers: [MeController],
   providers: [MeService],
   exports: [MeService],

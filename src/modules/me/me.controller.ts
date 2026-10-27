@@ -185,4 +185,13 @@ export class MeController {
   ) {
     return this.meService.getEarnings(companyId, user);
   }
+
+  @Get('attendance-sheet')
+  async getMyAttendanceSheet(
+    @TenantId() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('month') month?: string
+  ) {
+    return this.meService.getMyAttendanceSheet(companyId, user, month);
+  }
 }

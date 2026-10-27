@@ -27,4 +27,8 @@ export class QueryAttendanceDto {
   @IsIn(['none', 'late_arrival', 'early_departure', 'out_of_geofence', 'overtime', 'unmatched_shift', 'all'])
   @IsOptional()
   varianceFlag?: VarianceFlag | 'all';
+
+  @IsString()
+  @IsOptional()
+  _t?: string;
 }

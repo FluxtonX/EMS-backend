@@ -40,7 +40,15 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-request-id',
+      'Cache-Control',
+      'Pragma',
+      'Expires',
+      'X-Requested-With',
+    ],
   });
 
   // Global Prefix for Versioned REST API (Section 25)

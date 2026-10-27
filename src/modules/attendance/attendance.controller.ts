@@ -95,6 +95,16 @@ export class AttendanceController {
     return this.attendanceService.findAll(companyId, query);
   }
 
+  @Get('daily-sheet')
+  @RequirePermissions(Permission.ATTENDANCE_VIEW)
+  async getDailySheet(
+    @TenantId() companyId: string,
+    @Query('date') date?: string,
+    @Query('siteId') siteId?: string
+  ) {
+    return this.attendanceService.getDailySheet(companyId, { date, siteId });
+  }
+
   @Get(':id')
   @RequirePermissions(Permission.ATTENDANCE_VIEW)
   async findById(

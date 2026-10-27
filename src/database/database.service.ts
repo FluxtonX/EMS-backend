@@ -3644,21 +3644,39 @@ export class DatabaseService implements OnModuleInit {
         if (filters.varianceFlag && filters.varianceFlag !== 'all') query = query.eq('variance_flag', filters.varianceFlag);
         if (filters.status && filters.status !== 'all') {
           query = query.eq('status', filters.status);
-          if (filters.startDate) query = query.gte('clock_in_time', `${filters.startDate}T00:00:00.000Z`);
-          if (filters.endDate) query = query.lte('clock_in_time', `${filters.endDate}T23:59:59.999Z`);
-        } else if (filters.startDate && filters.endDate) {
-          // If searching for a date, always include any currently on-duty officers so active shifts are never hidden
-          query = query.or(`and(clock_in_time.gte.${filters.startDate}T00:00:00.000Z,clock_in_time.lte.${filters.endDate}T23:59:59.999Z),status.eq.clocked_in,status.eq.on_break`);
-        } else if (filters.startDate) {
-          query = query.or(`clock_in_time.gte.${filters.startDate}T00:00:00.000Z,status.eq.clocked_in,status.eq.on_break`);
-        } else if (filters.endDate) {
-          query = query.or(`clock_in_time.lte.${filters.endDate}T23:59:59.999Z,status.eq.clocked_in,status.eq.on_break`);
+        }
+        if (filters.startDate || filters.endDate) {
+          if (filters.startDate) {
+            const startD = new Date(`${filters.startDate}T00:00:00.000Z`);
+            startD.setUTCDate(startD.getUTCDate() - 2);
+            query = query.gte('clock_in_time', startD.toISOString());
+          }
+          if (filters.endDate) {
+            query = query.lte('clock_in_time', `${filters.endDate}T23:59:59.999Z`);
+          }
         }
 
         const { data, error } = await query;
+        if (error) {
+          this.logger.error(`Supabase findAttendanceRecords error: ${error.message}`);
+        }
         if (!error && data) {
           for (const row of data) {
             const record = this.mapAttendance(row);
+            const inDate = record.clockInTime ? record.clockInTime.toISOString().split('T')[0] : '';
+            const outDate = record.clockOutTime ? record.clockOutTime.toISOString().split('T')[0] : '';
+            const isActive = record.status === 'clocked_in' || record.status === 'on_break';
+
+            if (filters.startDate || filters.endDate) {
+              const touchesDate =
+                isActive ||
+                (filters.startDate && filters.endDate && filters.startDate === filters.endDate
+                  ? (inDate === filters.startDate || outDate === filters.startDate || (inDate <= filters.startDate && (!outDate || outDate >= filters.startDate)))
+                  : (!filters.startDate || inDate >= filters.startDate || outDate >= filters.startDate) &&
+                    (!filters.endDate || inDate <= filters.endDate));
+              if (!touchesDate) continue;
+            }
+
             const employee = row.employees
               ? this.mapEmployee(row.employees)
               : await this.findEmployeeById(companyId, record.employeeId);
